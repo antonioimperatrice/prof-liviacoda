@@ -9,8 +9,8 @@ import {
   getDocs,
   addDoc,
   deleteDoc,
-  setDoc, // <--- Assicurati che sia importato
-  Timestamp, // <--- Assicurati che sia importato
+  setDoc,
+  Timestamp,
   orderBy,
   query,
 } from "firebase/firestore";
@@ -43,10 +43,61 @@ const Settings: React.FC = () => {
   const [newStudentNameForClass, setNewStudentNameForClass] =
     useState<string>("");
 
-  // Puoi rimuovere questo log di render se non serve più per il debug
-  // console.log( /* ... log di render ... */ );
+  // DEBUG LOG RENDER CYCLE
+  console.log(
+    `%c--- RENDER CYCLE (Settings.tsx) ---
+    isLoading: %c${isLoading}
+    %cspinning: %c${spinning}
+    %cselectedStudentsDisplay: %c${
+      selectedStudentsDisplay
+        ? `[${selectedStudentsDisplay.map((s) => s.name).join(", ")}] (${
+            selectedStudentsDisplay.length
+          } items)`
+        : String(selectedStudentsDisplay)
+    }
+    %cerror: %c${error}
+    %cnumToSelect: %c${numToSelect}
+    %cstudents #: %c${students.length}
+    %ccurrentConfiguringSlotIndex: %c${currentConfiguringSlotIndex}
+    %celigibilityPerSlot length: %c${eligibilityPerSlot.length}`,
+    "color: magenta; font-weight: bold;",
+    `color: ${isLoading ? "orange" : "green"};`,
+    isLoading,
+    "color: gray;",
+    `color: ${spinning ? "orange" : "green"};`,
+    spinning,
+    "color: gray;",
+    `color: ${
+      selectedStudentsDisplay && selectedStudentsDisplay.length > 0
+        ? "green"
+        : selectedStudentsDisplay === null
+        ? "orange"
+        : "red"
+    };`,
+    selectedStudentsDisplay
+      ? `[${selectedStudentsDisplay.map((s) => s.name).join(", ")}] (${
+          selectedStudentsDisplay.length
+        } items)`
+      : String(selectedStudentsDisplay),
+    "color: gray;",
+    `color: ${error ? "red" : "green"};`,
+    error,
+    "color: gray;",
+    "color: blue;",
+    numToSelect,
+    "color: gray;",
+    "color: blue;",
+    students.length,
+    "color: gray;",
+    "color: blue;",
+    currentConfiguringSlotIndex,
+    "color: gray;",
+    "color: blue;",
+    eligibilityPerSlot.length
+  );
 
   const fetchClassroomAndStudents = useCallback(async () => {
+    // console.error("!!! SETTINGS_DEBUG: FETCH_CLASSROOM_AND_STUDENTS_CALLED !!!");
     if (!classroomId) {
       setError("ID Classe non fornito.");
       setIsLoading(false);
@@ -159,6 +210,38 @@ const Settings: React.FC = () => {
     );
   };
 
+  const handleSelectAllForCurrentSlot = () => {
+    if (
+      currentConfiguringSlotIndex < 0 ||
+      currentConfiguringSlotIndex >= eligibilityPerSlot.length ||
+      students.length === 0
+    )
+      return;
+    const allStudentIdsInClass = new Set(students.map((s) => s.id));
+    setEligibilityPerSlot((prevEligibility) =>
+      prevEligibility.map((slotEligibles, index) =>
+        index === currentConfiguringSlotIndex
+          ? new Set(allStudentIdsInClass)
+          : slotEligibles
+      )
+    );
+  };
+
+  const handleDeselectAllForCurrentSlot = () => {
+    if (
+      currentConfiguringSlotIndex < 0 ||
+      currentConfiguringSlotIndex >= eligibilityPerSlot.length
+    )
+      return;
+    setEligibilityPerSlot((prevEligibility) =>
+      prevEligibility.map((slotEligibles, index) =>
+        index === currentConfiguringSlotIndex
+          ? new Set<string>()
+          : slotEligibles
+      )
+    );
+  };
+
   const handleAddStudentToClass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStudentNameForClass.trim() || !classroomId) return;
@@ -240,7 +323,6 @@ const Settings: React.FC = () => {
     setSelectedStudentsDisplay(null);
 
     setTimeout(() => {
-      // Spin delay
       const finalSelected: Student[] = [];
       const pickedIdsInThisRound: Set<string> = new Set();
       let notEnoughUnique = false;
@@ -267,48 +349,55 @@ const Settings: React.FC = () => {
       }
 
       setTimeout(() => {
-        // Reveal delay
         if (notEnoughUnique && finalSelected.length < numToSelect) {
           setError(
             `Estrazione parziale: ${finalSelected.length}/${numToSelect}. Candidati unici esauriti.`
           );
         }
-        setSelectedStudentsDisplay(finalSelected); // Visualizzazione locale in Settings.tsx
+        setSelectedStudentsDisplay(finalSelected);
         setSpinning(false);
 
-        // ----- SALVATAGGIO SU FIRESTORE PER Display.tsx -----
         if (classroomId) {
-          // Salva sempre, anche se finalSelected è vuoto (per pulire Display.tsx)
-          console.log(
-            "SETTINGS: Saving/Clearing selection in Firestore for Display.tsx. Selected count:",
-            finalSelected.length
-          );
           setDoc(doc(db, "selections", classroomId), {
             selectedStudentsList: finalSelected.map((s) => ({
-              // Sarà un array vuoto se finalSelected è vuoto
               studentId: s.id,
               studentName: s.name,
               studentNumber: s.number,
             })),
             timestamp: Timestamp.fromDate(new Date()),
             classroomName: classroomName,
-          })
-            .then(() => {
-              // console.log("SETTINGS: Firestore 'selections' document updated/cleared.");
-            })
-            .catch((errFS) => {
-              console.error(
-                "Error updating/clearing 'selections' document in Firestore:",
-                errFS
-              );
-              setError(
-                "Errore nel comunicare l'estrazione alla pagina di visualizzazione."
-              );
-            });
+          }).catch((errFS) => {
+            console.error(
+              "Error saving/clearing 'selections' document in Firestore:",
+              errFS
+            );
+            setError(
+              "Errore nel comunicare l'estrazione alla pagina di visualizzazione."
+            );
+          });
         }
-        // ----- FINE BLOCCO SALVATAGGIO SU FIRESTORE -----
       }, 1200);
     }, 200);
+  };
+
+  const handleClearExtractionResults = () => {
+    setSelectedStudentsDisplay(null);
+    setError(null);
+    if (classroomId) {
+      setDoc(doc(db, "selections", classroomId), {
+        selectedStudentsList: [],
+        timestamp: Timestamp.fromDate(new Date()),
+        classroomName: classroomName,
+      }).catch((errFS) => {
+        console.error(
+          "Error clearing 'selections' document via button:",
+          errFS
+        );
+        setError(
+          "Errore nel pulire la visualizzazione remota dell'estrazione."
+        );
+      });
+    }
   };
 
   const handleShowDisplay = () => {
@@ -444,13 +533,40 @@ const Settings: React.FC = () => {
                   {eligibilityPerSlot[currentConfiguringSlotIndex] !==
                   undefined ? (
                     <>
-                      <h4 className="text-sm font-medium text-gray-600 mb-2">
-                        Idonei per{" "}
-                        <span className="font-bold text-sky-600">
-                          {currentConfiguringSlotIndex + 1}° Estratto
-                        </span>
-                        :
-                      </h4>
+                      <div className="flex justify-between items-center mb-2">
+                        <h4 className="text-sm font-medium text-gray-600">
+                          Idonei per{" "}
+                          <span className="font-bold text-sky-600">
+                            {currentConfiguringSlotIndex + 1}° Estratto
+                          </span>
+                          :
+                        </h4>
+                      </div>
+                      <p className="text-xs text-gray-500 mb-2">
+                        Conteggio: {currentEligibleSetForConfig.size} /{" "}
+                        {students.length}
+                      </p>
+                      {/* BOTTONI SELEZIONA/DESELEZIONA TUTTI */}
+                      <div className="flex gap-2 mb-3">
+                        <button
+                          onClick={handleSelectAllForCurrentSlot}
+                          className="flex-1 px-2 py-1.5 text-xs bg-green-100 hover:bg-green-200 text-green-700 rounded-md border border-green-300 disabled:opacity-50"
+                          disabled={students.length === 0 || spinning}
+                        >
+                          Selez. Tutti
+                        </button>
+                        <button
+                          onClick={handleDeselectAllForCurrentSlot}
+                          className="flex-1 px-2 py-1.5 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded-md border border-red-300 disabled:opacity-50"
+                          disabled={
+                            students.length === 0 ||
+                            currentEligibleSetForConfig.size === 0 ||
+                            spinning
+                          }
+                        >
+                          Deselez. Tutti
+                        </button>
+                      </div>
                       <ul className="space-y-1.5 max-h-80 overflow-y-auto custom-scrollbar pr-1.5">
                         {students.map((student) => (
                           <li
@@ -470,6 +586,7 @@ const Settings: React.FC = () => {
                               onChange={() =>
                                 handleToggleEligibilityForSlot(student.id)
                               }
+                              disabled={spinning}
                               className="form-checkbox h-4 w-4 sm:h-5 sm:w-5 text-sky-600 border-gray-300 rounded focus:ring-sky-500 cursor-pointer mr-2 sm:mr-2.5 shrink-0"
                             />
                             <label
@@ -508,7 +625,6 @@ const Settings: React.FC = () => {
                 </p>
               ) : (
                 <>
-                  {/* Visualizzazione Semplificata (funzionante) */}
                   <div className="min-h-[10rem] w-full max-w-md mx-auto border-2 border-dashed border-gray-300 rounded-lg p-3 sm:p-4 text-center">
                     {spinning && (
                       <p className="text-sky-500 text-lg">Attendere...</p>
@@ -546,30 +662,42 @@ const Settings: React.FC = () => {
                       )}
                   </div>
 
-                  <button
-                    onClick={handleRandomSelection}
-                    disabled={
-                      spinning ||
-                      students.length === 0 ||
-                      numToSelect <= 0 ||
-                      eligibilityPerSlot.length !== numToSelect ||
-                      eligibilityPerSlot.some(
-                        (slot) => !slot || slot.size === 0
-                      )
-                    }
-                    className="mt-4 sm:mt-6 px-5 py-2.5 sm:px-6 sm:py-3 bg-gradient-to-r from-sky-500 to-cyan-400 text-white text-sm sm:text-base font-semibold rounded-lg shadow-lg hover:from-sky-600 hover:to-cyan-500 disabled:opacity-60 disabled:cursor-not-allowed transition-all transform hover:scale-105"
-                  >
-                    {spinning
-                      ? "Estrazione..."
-                      : `Estrai ${numToSelect} ${
-                          numToSelect === 1 ? "Studente" : "Studenti"
-                        }`}
-                  </button>
+                  <div className="mt-4 sm:mt-6 flex flex-col sm:flex-row justify-center items-center gap-2 sm:gap-3">
+                    <button
+                      onClick={handleRandomSelection}
+                      disabled={
+                        spinning ||
+                        students.length === 0 ||
+                        numToSelect <= 0 ||
+                        eligibilityPerSlot.length !== numToSelect ||
+                        eligibilityPerSlot.some(
+                          (slot) => !slot || slot.size === 0
+                        )
+                      }
+                      className="w-full sm:w-auto px-5 py-2.5 sm:px-6 sm:py-3 bg-gradient-to-r from-sky-500 to-cyan-400 text-white text-sm sm:text-base font-semibold rounded-lg shadow-lg hover:from-sky-600 hover:to-cyan-500 disabled:opacity-60 disabled:cursor-not-allowed transition-all transform hover:scale-105"
+                    >
+                      {spinning
+                        ? "Estrazione..."
+                        : `Estrai ${numToSelect} ${
+                            numToSelect === 1 ? "Studente" : "Studenti"
+                          }`}
+                    </button>
+                    {selectedStudentsDisplay &&
+                      selectedStudentsDisplay.length > 0 &&
+                      !spinning && (
+                        <button
+                          onClick={handleClearExtractionResults}
+                          className="w-full sm:w-auto px-4 py-2 text-xs bg-yellow-400 hover:bg-yellow-500 text-yellow-900 font-semibold rounded-md shadow-sm transition"
+                        >
+                          Pulisci Risultati
+                        </button>
+                      )}
+                  </div>
                   <button
                     onClick={handleShowDisplay}
-                    className="mt-4 sm:mt-6 ml-2 sm:ml-3 px-3 py-2 sm:px-4 sm:py-2.5 text-xs sm:text-sm text-sky-600 border border-sky-500 rounded-md hover:bg-sky-50 transition"
+                    className="block mx-auto mt-3 sm:mt-4 px-3 py-2 sm:px-4 sm:py-2.5 text-xs sm:text-sm text-sky-600 border border-sky-500 rounded-md hover:bg-sky-50 transition"
                   >
-                    Visualizza &rarr;
+                    Apri Pagina Visualizzazione &rarr;
                   </button>
                 </>
               )}
@@ -661,7 +789,6 @@ const Settings: React.FC = () => {
         </div>
       </div>
       <style>{`
-        /* Stili per la scrollbar, puoi rimuovere se non ti piace */
         .custom-scrollbar::-webkit-scrollbar { width: 5px; height: 5px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cdd5dd; border-radius: 10px; }
