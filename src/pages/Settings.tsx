@@ -405,7 +405,6 @@ const Settings: React.FC = () => {
   };
 
   const handleClearExtractionResults = () => {
-    // ... (your existing handleClearExtractionResults function, unchanged)
     setSelectedStudentsDisplay(null);
     setError(null);
     if (classroomId) {
@@ -711,16 +710,12 @@ const Settings: React.FC = () => {
                             numToSelect === 1 ? "Studente" : "Studenti"
                           }`}
                     </button>
-                    {selectedStudentsDisplay &&
-                      selectedStudentsDisplay.length > 0 &&
-                      !spinning && (
-                        <button
-                          onClick={handleClearExtractionResults}
-                          className="w-full sm:w-auto px-4 py-2 text-xs bg-yellow-400 hover:bg-yellow-500 text-yellow-900 font-semibold rounded-md shadow-sm transition"
-                        >
-                          Pulisci Risultati
-                        </button>
-                      )}
+                    <button
+                      onClick={handleClearExtractionResults}
+                      className="w-full sm:w-auto px-4 py-2 text-xs bg-yellow-400 hover:bg-yellow-500 text-yellow-900 font-semibold rounded-md shadow-sm transition"
+                    >
+                      Pulisci Risultati
+                    </button>
                   </div>
                   <button
                     onClick={handleShowDisplay}
