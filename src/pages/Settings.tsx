@@ -13,6 +13,7 @@ import {
   Timestamp,
   orderBy,
   query,
+  writeBatch, // Import writeBatch
 } from "firebase/firestore";
 
 interface Student {
@@ -43,61 +44,7 @@ const Settings: React.FC = () => {
   const [newStudentNameForClass, setNewStudentNameForClass] =
     useState<string>("");
 
-  // DEBUG LOG RENDER CYCLE
-  console.log(
-    `%c--- RENDER CYCLE (Settings.tsx) ---
-    isLoading: %c${isLoading}
-    %cspinning: %c${spinning}
-    %cselectedStudentsDisplay: %c${
-      selectedStudentsDisplay
-        ? `[${selectedStudentsDisplay.map((s) => s.name).join(", ")}] (${
-            selectedStudentsDisplay.length
-          } items)`
-        : String(selectedStudentsDisplay)
-    }
-    %cerror: %c${error}
-    %cnumToSelect: %c${numToSelect}
-    %cstudents #: %c${students.length}
-    %ccurrentConfiguringSlotIndex: %c${currentConfiguringSlotIndex}
-    %celigibilityPerSlot length: %c${eligibilityPerSlot.length}`,
-    "color: magenta; font-weight: bold;",
-    `color: ${isLoading ? "orange" : "green"};`,
-    isLoading,
-    "color: gray;",
-    `color: ${spinning ? "orange" : "green"};`,
-    spinning,
-    "color: gray;",
-    `color: ${
-      selectedStudentsDisplay && selectedStudentsDisplay.length > 0
-        ? "green"
-        : selectedStudentsDisplay === null
-        ? "orange"
-        : "red"
-    };`,
-    selectedStudentsDisplay
-      ? `[${selectedStudentsDisplay.map((s) => s.name).join(", ")}] (${
-          selectedStudentsDisplay.length
-        } items)`
-      : String(selectedStudentsDisplay),
-    "color: gray;",
-    `color: ${error ? "red" : "green"};`,
-    error,
-    "color: gray;",
-    "color: blue;",
-    numToSelect,
-    "color: gray;",
-    "color: blue;",
-    students.length,
-    "color: gray;",
-    "color: blue;",
-    currentConfiguringSlotIndex,
-    "color: gray;",
-    "color: blue;",
-    eligibilityPerSlot.length
-  );
-
   const fetchClassroomAndStudents = useCallback(async () => {
-    // console.error("!!! SETTINGS_DEBUG: FETCH_CLASSROOM_AND_STUDENTS_CALLED !!!");
     if (!classroomId) {
       setError("ID Classe non fornito.");
       setIsLoading(false);
@@ -187,9 +134,9 @@ const Settings: React.FC = () => {
         setCurrentConfiguringSlotIndex(0);
       }
     } else {
-      setCurrentConfiguringSlotIndex(0);
+      setCurrentConfiguringSlotIndex(0); // Default to 0 if numToSelect is 0 or less
     }
-  }, [numToSelect, students, isLoading]);
+  }, [numToSelect, students, isLoading]); // Removed eligibilityPerSlot from deps to avoid potential loop, ensure logic is sound
 
   const handleToggleEligibilityForSlot = (studentId: string) => {
     if (
@@ -288,13 +235,90 @@ const Settings: React.FC = () => {
       setSelectedStudentsDisplay((prev) =>
         prev ? prev.filter((s) => s.id !== studentId) : null
       );
+      // Note: Student numbers are not re-sequenced here.
+      // If sequential numbers are strictly needed after deletion,
+      // you would need to update all subsequent students' numbers.
     } catch (err) {
       console.error(err);
       setError(`Errore eliminazione ${name}.`);
     }
   };
 
+  // --- START: New function to handle student reordering ---
+  const handleMoveStudent = async (
+    studentIdToMove: string,
+    direction: "up" | "down"
+  ) => {
+    if (!classroomId || spinning) return;
+
+    const currentIndex = students.findIndex((s) => s.id === studentIdToMove);
+    if (currentIndex === -1) return;
+
+    let targetIndex;
+    if (direction === "up") {
+      if (currentIndex === 0) return; // Already at the top
+      targetIndex = currentIndex - 1;
+    } else {
+      // direction === "down"
+      if (currentIndex === students.length - 1) return; // Already at the bottom
+      targetIndex = currentIndex + 1;
+    }
+
+    const studentToMove = students[currentIndex];
+    const studentToSwapWith = students[targetIndex];
+
+    // The numbers to be swapped
+    const newNumberForStudentToMove = studentToSwapWith.number;
+    const newNumberForStudentToSwapWith = studentToMove.number;
+
+    const studentToMoveRef = doc(
+      db,
+      "classrooms",
+      classroomId,
+      "students",
+      studentToMove.id
+    );
+    const studentToSwapWithRef = doc(
+      db,
+      "classrooms",
+      classroomId,
+      "students",
+      studentToSwapWith.id
+    );
+
+    try {
+      setError(null);
+      const batch = writeBatch(db);
+      batch.update(studentToMoveRef, { number: newNumberForStudentToMove });
+      batch.update(studentToSwapWithRef, {
+        number: newNumberForStudentToSwapWith,
+      });
+      await batch.commit();
+
+      // Update local state
+      setStudents((prevStudents) => {
+        const updatedStudents = prevStudents.map((s) => {
+          if (s.id === studentToMove.id) {
+            return { ...s, number: newNumberForStudentToMove };
+          }
+          if (s.id === studentToSwapWith.id) {
+            return { ...s, number: newNumberForStudentToSwapWith };
+          }
+          return s;
+        });
+        return updatedStudents.sort((a, b) => a.number - b.number);
+      });
+    } catch (err) {
+      console.error("Error reordering students:", err);
+      setError("Errore durante il riordino degli studenti.");
+      // Optionally, re-fetch students to ensure consistency if an error occurs
+      // await fetchClassroomAndStudents();
+    }
+  };
+  // --- END: New function to handle student reordering ---
+
   const handleRandomSelection = () => {
+    // ... (your existing handleRandomSelection function, unchanged)
     setError(null);
     if (spinning) return;
     if (numToSelect <= 0) {
@@ -381,6 +405,7 @@ const Settings: React.FC = () => {
   };
 
   const handleClearExtractionResults = () => {
+    // ... (your existing handleClearExtractionResults function, unchanged)
     setSelectedStudentsDisplay(null);
     setError(null);
     if (classroomId) {
@@ -401,6 +426,7 @@ const Settings: React.FC = () => {
   };
 
   const handleShowDisplay = () => {
+    // ... (your existing handleShowDisplay function, unchanged)
     if (!classroomId) {
       setError("ID classe non trovato.");
       return;
@@ -420,6 +446,7 @@ const Settings: React.FC = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-100 to-sky-100 p-4 sm:p-6 md:p-8">
       <div className="max-w-6xl mx-auto">
+        {/* ... (Header and Error display remain the same) ... */}
         <header className="mb-6 sm:mb-8 relative text-center">
           <button
             onClick={() => navigate("/classrooms")}
@@ -461,6 +488,7 @@ const Settings: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
           {/* Colonna Sinistra: Configurazione Slot e Idoneità */}
           <div className="lg:col-span-1 space-y-6 sm:space-y-8">
+            {/* ... (Imposta Estrazione and Configura Idoneità per Slot sections remain largely the same, ensure to pass `spinning` to disable elements) ... */}
             <section className="p-3 sm:p-4 bg-white rounded-xl shadow-xl">
               <h2 className="text-lg sm:text-xl font-semibold text-gray-700 mb-3">
                 Imposta Estrazione
@@ -478,14 +506,14 @@ const Settings: React.FC = () => {
                   onChange={(e) => {
                     const newN = parseInt(e.target.value, 10);
                     setNumToSelect(newN);
-                    setSelectedStudentsDisplay(null);
+                    setSelectedStudentsDisplay(null); // Clear results when count changes
                   }}
                   disabled={spinning || students.length === 0}
                   className="mt-1 block w-full pl-3 pr-8 py-2 text-sm sm:text-base border-gray-300 focus:outline-none focus:ring-sky-500 focus:border-sky-500 rounded-md disabled:bg-gray-100"
                 >
                   {students.length > 0 ? (
                     Array.from(
-                      { length: Math.min(students.length, 10) },
+                      { length: Math.min(students.length, 10) }, // Max 10 or total students
                       (_, i) => i + 1
                     ).map((num) => (
                       <option key={num} value={num}>
@@ -516,7 +544,8 @@ const Settings: React.FC = () => {
                           onClick={() =>
                             setCurrentConfiguringSlotIndex(slotIndex)
                           }
-                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors ${
+                          disabled={spinning}
+                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors disabled:opacity-70 ${
                             currentConfiguringSlotIndex === slotIndex
                               ? "bg-sky-600 text-white shadow-md"
                               : "bg-gray-200 hover:bg-gray-300 text-gray-700"
@@ -546,7 +575,6 @@ const Settings: React.FC = () => {
                         Conteggio: {currentEligibleSetForConfig.size} /{" "}
                         {students.length}
                       </p>
-                      {/* BOTTONI SELEZIONA/DESELEZIONA TUTTI */}
                       <div className="flex gap-2 mb-3">
                         <button
                           onClick={handleSelectAllForCurrentSlot}
@@ -615,6 +643,7 @@ const Settings: React.FC = () => {
 
           {/* Colonna Destra: Esecuzione Estrazione e Elenco Studenti Classe */}
           <div className="lg:col-span-2 space-y-6 sm:space-y-8">
+            {/* ... (Esegui Estrazione section remains largely the same, ensure to pass `spinning` to disable elements) ... */}
             <section className="bg-white p-4 sm:p-6 rounded-xl shadow-xl text-center">
               <h2 className="text-xl sm:text-2xl font-semibold text-gray-700 mb-4">
                 Esegui Estrazione
@@ -714,7 +743,8 @@ const Settings: React.FC = () => {
                   </p>
                 ) : (
                   <ul className="space-y-1.5 max-h-72 overflow-y-auto custom-scrollbar pr-1.5">
-                    {students.map((student) => (
+                    {/* --- START: Modified student list item with arrows --- */}
+                    {students.map((student, index) => (
                       <li
                         key={student.id}
                         className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-md group text-sm"
@@ -730,32 +760,89 @@ const Settings: React.FC = () => {
                             {student.name}
                           </span>
                         </div>
-                        <button
-                          onClick={() =>
-                            handleDeleteStudentFromClass(student.id)
-                          }
-                          className="text-red-500 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-                          title="Elimina studente dalla classe"
-                        >
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            className="h-4 w-4 sm:h-5 sm:w-5"
-                            viewBox="0 0 20 20"
-                            fill="currentColor"
+                        <div className="flex items-center space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <button
+                            onClick={() => handleMoveStudent(student.id, "up")}
+                            disabled={index === 0 || spinning}
+                            className={`p-1 rounded-md hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed ${
+                              index === 0
+                                ? "text-gray-400"
+                                : "text-sky-600 hover:text-sky-700"
+                            }`}
+                            title="Sposta su"
                           >
-                            <path
-                              fillRule="evenodd"
-                              d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                        </button>
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              className="h-4 w-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth="3"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M5 15l7-7 7 7"
+                              />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() =>
+                              handleMoveStudent(student.id, "down")
+                            }
+                            disabled={index === students.length - 1 || spinning}
+                            className={`p-1 rounded-md hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed ${
+                              index === students.length - 1
+                                ? "text-gray-400"
+                                : "text-sky-600 hover:text-sky-700"
+                            }`}
+                            title="Sposta giù"
+                          >
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              className="h-4 w-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth="3"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M19 9l-7 7-7-7"
+                              />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() =>
+                              handleDeleteStudentFromClass(student.id)
+                            }
+                            disabled={spinning}
+                            className="p-1 rounded-md text-red-500 hover:text-red-700 hover:bg-gray-200 disabled:opacity-50"
+                            title="Elimina studente dalla classe"
+                          >
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              className="h-4 w-4 sm:h-5 sm:w-5" // Delete icon can be slightly larger
+                              viewBox="0 0 20 20"
+                              fill="currentColor"
+                            >
+                              <path
+                                fillRule="evenodd"
+                                d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
+                                clipRule="evenodd"
+                              />
+                            </svg>
+                          </button>
+                        </div>
                       </li>
                     ))}
+                    {/* --- END: Modified student list item --- */}
                   </ul>
                 )}
               </section>
               <section className="bg-white p-3 sm:p-4 rounded-xl shadow-xl">
+                {/* ... (Aggiungi Studente alla Classe section remains the same) ... */}
                 <h3 className="text-md sm:text-lg font-semibold text-gray-700 mb-3">
                   Aggiungi Studente alla Classe
                 </h3>
@@ -773,12 +860,14 @@ const Settings: React.FC = () => {
                       }
                       placeholder="Es. Laura Bianchi"
                       required
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-sky-500 focus:border-sky-500 sm:text-sm"
+                      disabled={spinning}
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-sky-500 focus:border-sky-500 sm:text-sm disabled:bg-gray-50"
                     />
                   </div>
                   <button
                     type="submit"
-                    className="w-full bg-sky-500 hover:bg-sky-600 text-white font-semibold py-2 px-3 rounded-md shadow-sm transition text-sm"
+                    disabled={spinning || !newStudentNameForClass.trim()}
+                    className="w-full bg-sky-500 hover:bg-sky-600 text-white font-semibold py-2 px-3 rounded-md shadow-sm transition text-sm disabled:opacity-70"
                   >
                     Aggiungi Studente
                   </button>
