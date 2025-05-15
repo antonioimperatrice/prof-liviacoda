@@ -1,7 +1,7 @@
 // src/pages/Settings.tsx
 import React, { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { db } from "../firebase/config"; // Ensure this path is correct
+import { db } from "../firebase/config";
 import {
   collection,
   doc,
@@ -9,8 +9,8 @@ import {
   getDocs,
   addDoc,
   deleteDoc,
-  setDoc,
-  Timestamp,
+  setDoc, // <--- Assicurati che sia importato
+  Timestamp, // <--- Assicurati che sia importato
   orderBy,
   query,
 } from "firebase/firestore";
@@ -26,13 +26,25 @@ const Settings: React.FC = () => {
   const { classroomId } = useParams<{ classroomId: string }>();
   const navigate = useNavigate();
 
-  const [classroomName, setClassroomName] = useState("");
+  const [classroomName, setClassroomName] = useState<string>("");
   const [students, setStudents] = useState<Student[]>([]);
-  const [newStudentName, setNewStudentName] = useState("");
-  const [spinning, setSpinning] = useState(false);
-  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [numToSelect, setNumToSelect] = useState<number>(1);
+  const [eligibilityPerSlot, setEligibilityPerSlot] = useState<
+    Array<Set<string>>
+  >([new Set()]);
+  const [currentConfiguringSlotIndex, setCurrentConfiguringSlotIndex] =
+    useState<number>(0);
+  const [spinning, setSpinning] = useState<boolean>(false);
+  const [selectedStudentsDisplay, setSelectedStudentsDisplay] = useState<
+    Student[] | null
+  >(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [newStudentNameForClass, setNewStudentNameForClass] =
+    useState<string>("");
+
+  // Puoi rimuovere questo log di render se non serve più per il debug
+  // console.log( /* ... log di render ... */ );
 
   const fetchClassroomAndStudents = useCallback(async () => {
     if (!classroomId) {
@@ -42,171 +54,292 @@ const Settings: React.FC = () => {
     }
     setIsLoading(true);
     setError(null);
+    setSelectedStudentsDisplay(null);
     try {
-      const classroomRef = doc(db, "classrooms", classroomId);
-      const classroomSnap = await getDoc(classroomRef);
-
-      if (classroomSnap.exists()) {
-        setClassroomName(classroomSnap.data().name);
-      } else {
+      const classroomDocRef = doc(db, "classrooms", classroomId);
+      const classroomSnap = await getDoc(classroomDocRef);
+      if (classroomSnap.exists()) setClassroomName(classroomSnap.data().name);
+      else {
         setError("Classe non trovata.");
+        navigate("/classrooms", { replace: true });
         setIsLoading(false);
         return;
       }
 
-      const studentsCollection = collection(
+      const studentsCollRef = collection(
         db,
         "classrooms",
         classroomId,
         "students"
       );
-      const q = query(studentsCollection, orderBy("number")); // Order by number
-      const snapshot = await getDocs(q);
-      const studentsList = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
+      const q = query(studentsCollRef, orderBy("number"));
+      const studentsSnapshot = await getDocs(q);
+      const fetchedStudents = studentsSnapshot.docs.map((sDoc) => ({
+        id: sDoc.id,
+        ...sDoc.data(),
       })) as Student[];
-      setStudents(studentsList);
+
+      setStudents(fetchedStudents);
+
+      if (fetchedStudents.length > 0) {
+        setCurrentConfiguringSlotIndex(0);
+      } else {
+        setNumToSelect(1);
+        setCurrentConfiguringSlotIndex(0);
+      }
     } catch (err) {
       console.error("Error fetching data:", err);
       setError("Impossibile caricare i dati della classe.");
     } finally {
       setIsLoading(false);
     }
-  }, [classroomId]);
+  }, [classroomId, navigate]);
 
   useEffect(() => {
     fetchClassroomAndStudents();
   }, [fetchClassroomAndStudents]);
 
-  const handleAddStudent = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newStudentName.trim() || !classroomId) return;
+  useEffect(() => {
+    if (isLoading && students.length === 0) {
+      if (
+        numToSelect > 0 &&
+        (!eligibilityPerSlot ||
+          eligibilityPerSlot.length !== numToSelect ||
+          eligibilityPerSlot.some((s) => s.size > 0))
+      ) {
+        setEligibilityPerSlot(
+          Array.from({ length: numToSelect }, () => new Set<string>())
+        );
+      }
+      return;
+    }
 
-    try {
-      const maxNumber =
-        students.length > 0 ? Math.max(...students.map((s) => s.number), 0) : 0;
-      const studentsCollection = collection(
-        db,
-        "classrooms",
-        classroomId,
-        "students"
-      );
-      const docRef = await addDoc(studentsCollection, {
-        name: newStudentName.trim(),
-        number: maxNumber + 1,
-        createdAt: Timestamp.fromDate(new Date()),
+    const studentIdsInClass = new Set(students.map((s) => s.id));
+    setEligibilityPerSlot((prevSlots) => {
+      const newCalculatedSlots = Array.from({ length: numToSelect }, (_, i) => {
+        const existingSlotMembers = prevSlots[i];
+        if (existingSlotMembers && i < prevSlots.length) {
+          return new Set(
+            [...existingSlotMembers].filter((id) => studentIdsInClass.has(id))
+          );
+        }
+        return new Set(studentIdsInClass);
       });
-      const newStudent = {
-        id: docRef.id,
-        name: newStudentName.trim(),
-        number: maxNumber + 1,
-      };
-      setStudents(
-        [...students, newStudent].sort((a, b) => a.number - b.number)
+      return newCalculatedSlots;
+    });
+
+    if (numToSelect > 0) {
+      if (
+        currentConfiguringSlotIndex >= numToSelect ||
+        currentConfiguringSlotIndex < 0
+      ) {
+        setCurrentConfiguringSlotIndex(0);
+      }
+    } else {
+      setCurrentConfiguringSlotIndex(0);
+    }
+  }, [numToSelect, students, isLoading]);
+
+  const handleToggleEligibilityForSlot = (studentId: string) => {
+    if (
+      currentConfiguringSlotIndex < 0 ||
+      currentConfiguringSlotIndex >= eligibilityPerSlot.length
+    )
+      return;
+    setEligibilityPerSlot((prevEligibility) =>
+      prevEligibility.map((slotEligibles, index) => {
+        if (index === currentConfiguringSlotIndex) {
+          const newSet = new Set(slotEligibles);
+          if (newSet.has(studentId)) newSet.delete(studentId);
+          else newSet.add(studentId);
+          return newSet;
+        }
+        return slotEligibles;
+      })
+    );
+  };
+
+  const handleAddStudentToClass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newStudentNameForClass.trim() || !classroomId) return;
+    const newNumber =
+      students.length > 0
+        ? Math.max(...students.map((s) => s.number), 0) + 1
+        : 1;
+    const studentData = {
+      name: newStudentNameForClass.trim(),
+      number: newNumber,
+      createdAt: Timestamp.fromDate(new Date()),
+    };
+    try {
+      const docRef = await addDoc(
+        collection(db, "classrooms", classroomId, "students"),
+        studentData
       );
-      setNewStudentName("");
-    } catch (error) {
-      console.error("Error adding student:", error);
-      alert("Errore durante l'aggiunta dello studente.");
+      setStudents((prev) =>
+        [...prev, { id: docRef.id, ...studentData }].sort(
+          (a, b) => a.number - b.number
+        )
+      );
+      setNewStudentNameForClass("");
+    } catch (err) {
+      console.error(err);
+      setError("Errore aggiunta studente.");
     }
   };
 
-  const handleDeleteStudent = async (studentId: string) => {
+  const handleDeleteStudentFromClass = async (studentId: string) => {
+    const name = students.find((s) => s.id === studentId)?.name || "studente";
     if (
-      !classroomId ||
-      !window.confirm("Sei sicuro di voler eliminare questo studente?")
+      !window.confirm(
+        `Eliminare ${name} dalla classe? Verrà rimosso da tutte le liste di idoneità per slot.`
+      )
     )
       return;
+    if (!classroomId) return;
     try {
       await deleteDoc(
         doc(db, "classrooms", classroomId, "students", studentId)
       );
-      setStudents(students.filter((student) => student.id !== studentId));
-    } catch (error) {
-      console.error("Error deleting student:", error);
-      alert("Errore durante l'eliminazione dello studente.");
+      setStudents((prev) => prev.filter((s) => s.id !== studentId));
+      setSelectedStudentsDisplay((prev) =>
+        prev ? prev.filter((s) => s.id !== studentId) : null
+      );
+    } catch (err) {
+      console.error(err);
+      setError(`Errore eliminazione ${name}.`);
     }
   };
 
   const handleRandomSelection = () => {
-    if (spinning || students.length === 0) return;
+    setError(null);
+    if (spinning) return;
+    if (numToSelect <= 0) {
+      setError("Seleziona almeno uno studente da estrarre.");
+      return;
+    }
+
+    let canProceed = true;
+    if (eligibilityPerSlot.length !== numToSelect) {
+      setError(
+        "Configurazione slot non allineata. Attendi o modifica N. studenti."
+      );
+      canProceed = false;
+    } else {
+      for (let i = 0; i < numToSelect; i++) {
+        if (!eligibilityPerSlot[i] || eligibilityPerSlot[i].size === 0) {
+          setError(`Il ${i + 1}° slot non ha studenti idonei configurati.`);
+          canProceed = false;
+          break;
+        }
+      }
+    }
+    if (!canProceed) return;
 
     setSpinning(true);
-    setSelectedStudent(null); // Clear previous selection immediately
+    setSelectedStudentsDisplay(null);
 
-    // Short delay to show "spinning" before picking
     setTimeout(() => {
-      const randomIndex = Math.floor(Math.random() * students.length);
-      const tempSelected = students[randomIndex];
+      // Spin delay
+      const finalSelected: Student[] = [];
+      const pickedIdsInThisRound: Set<string> = new Set();
+      let notEnoughUnique = false;
+      for (let i = 0; i < numToSelect; i++) {
+        const slotEligiblesSet = eligibilityPerSlot[i];
+        if (!slotEligiblesSet) {
+          notEnoughUnique = true;
+          break;
+        }
+        const availableCandidates = students.filter(
+          (s) => slotEligiblesSet.has(s.id) && !pickedIdsInThisRound.has(s.id)
+        );
+        if (availableCandidates.length > 0) {
+          const chosen =
+            availableCandidates[
+              Math.floor(Math.random() * availableCandidates.length)
+            ];
+          finalSelected.push(chosen);
+          pickedIdsInThisRound.add(chosen.id);
+        } else {
+          notEnoughUnique = true;
+          break;
+        }
+      }
 
-      // Actual "spin" duration
-      setTimeout(async () => {
-        setSelectedStudent(tempSelected);
+      setTimeout(() => {
+        // Reveal delay
+        if (notEnoughUnique && finalSelected.length < numToSelect) {
+          setError(
+            `Estrazione parziale: ${finalSelected.length}/${numToSelect}. Candidati unici esauriti.`
+          );
+        }
+        setSelectedStudentsDisplay(finalSelected); // Visualizzazione locale in Settings.tsx
         setSpinning(false);
 
-        if (classroomId && tempSelected) {
-          try {
-            await setDoc(doc(db, "selections", classroomId), {
-              studentId: tempSelected.id,
-              studentName: tempSelected.name,
-              studentNumber: tempSelected.number,
-              timestamp: Timestamp.fromDate(new Date()),
+        // ----- SALVATAGGIO SU FIRESTORE PER Display.tsx -----
+        if (classroomId) {
+          // Salva sempre, anche se finalSelected è vuoto (per pulire Display.tsx)
+          console.log(
+            "SETTINGS: Saving/Clearing selection in Firestore for Display.tsx. Selected count:",
+            finalSelected.length
+          );
+          setDoc(doc(db, "selections", classroomId), {
+            selectedStudentsList: finalSelected.map((s) => ({
+              // Sarà un array vuoto se finalSelected è vuoto
+              studentId: s.id,
+              studentName: s.name,
+              studentNumber: s.number,
+            })),
+            timestamp: Timestamp.fromDate(new Date()),
+            classroomName: classroomName,
+          })
+            .then(() => {
+              // console.log("SETTINGS: Firestore 'selections' document updated/cleared.");
+            })
+            .catch((errFS) => {
+              console.error(
+                "Error updating/clearing 'selections' document in Firestore:",
+                errFS
+              );
+              setError(
+                "Errore nel comunicare l'estrazione alla pagina di visualizzazione."
+              );
             });
-          } catch (error) {
-            console.error("Error saving selection:", error);
-            alert("Errore durante il salvataggio della selezione.");
-          }
         }
-      }, 1800); // This is the "reveal" time, total 200ms + 1800ms = 2s
+        // ----- FINE BLOCCO SALVATAGGIO SU FIRESTORE -----
+      }, 1200);
     }, 200);
   };
 
   const handleShowDisplay = () => {
+    if (!classroomId) {
+      setError("ID classe non trovato.");
+      return;
+    }
     window.open(`/display/${classroomId}`, "_blank", "noopener,noreferrer");
   };
 
-  if (isLoading) {
+  if (isLoading)
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100 text-gray-700 text-xl">
-        Caricamento dati classe...
+      <div className="min-h-screen flex items-center justify-center text-xl text-gray-600">
+        Caricamento...
       </div>
     );
-  }
-  if (error) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-red-50 text-red-700 p-4">
-        <p className="text-2xl font-semibold mb-4">{error}</p>
-        <button
-          onClick={() => navigate("/classrooms")}
-          className="px-6 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors"
-        >
-          Torna alle Classi
-        </button>
-      </div>
-    );
-  }
+  const currentEligibleSetForConfig =
+    eligibilityPerSlot[currentConfiguringSlotIndex] || new Set<string>();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-100 to-sky-100 p-4 sm:p-6 md:p-8">
-      <div className="max-w-5xl mx-auto">
-        <header className="mb-8 text-center">
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-600 via-cyan-500 to-teal-500 pb-2">
-            Gestione Classe:{" "}
-            <span className="underline decoration-wavy decoration-sky-400">
-              {classroomName}
-            </span>
-          </h1>
-        </header>
-
-        <div className="flex flex-col sm:flex-row justify-between items-center mb-8 space-y-3 sm:space-y-0 sm:space-x-4">
+      <div className="max-w-6xl mx-auto">
+        <header className="mb-6 sm:mb-8 relative text-center">
           <button
             onClick={() => navigate("/classrooms")}
-            className="w-full sm:w-auto px-6 py-3 bg-white border border-sky-500 text-sky-600 rounded-lg shadow-md hover:bg-sky-50 hover:shadow-lg transition-all duration-300 flex items-center justify-center space-x-2"
+            className="absolute top-0 left-0 mt-1 ml-1 sm:mt-0 sm:ml-0 px-3 py-2 text-sm bg-white border border-sky-500 text-sky-600 rounded-lg shadow-sm hover:bg-sky-50 transition-all flex items-center"
+            title="Torna alle Classi"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5"
+              className="h-4 w-4 mr-1.5"
               viewBox="0 0 20 20"
               fill="currentColor"
             >
@@ -216,164 +349,324 @@ const Settings: React.FC = () => {
                 clipRule="evenodd"
               />
             </svg>
-            <span>Torna alle Classi</span>
+            Classi
           </button>
-          <button
-            onClick={handleShowDisplay}
-            className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white rounded-lg shadow-md hover:shadow-xl hover:from-teal-600 hover:to-cyan-600 transition-all duration-300 transform hover:scale-105 flex items-center justify-center space-x-2"
-          >
-            <span>Apri Schermo Visualizzazione</span>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-            >
-              <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
-              <path
-                fillRule="evenodd"
-                d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.022 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z"
-                clipRule="evenodd"
-              />
-            </svg>
-          </button>
-        </div>
+          <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-600 via-cyan-500 to-teal-500 py-1">
+            Gestione:{" "}
+            <span className="underline decoration-wavy decoration-sky-400">
+              {classroomName}
+            </span>
+          </h1>
+        </header>
 
-        {/* Selection Area */}
-        <section className="bg-white p-6 sm:p-8 rounded-xl shadow-2xl mb-10 text-center">
-          <h2 className="text-2xl font-semibold text-gray-700 mb-6">
-            Area Selezione Studente
-          </h2>
+        {error && (
           <div
-            className={`h-48 w-48 mx-auto border-4 ${
-              spinning
-                ? "border-sky-500 animate-spin"
-                : "border-dashed border-gray-300"
-            } rounded-full flex items-center justify-center mb-6 transition-colors duration-500`}
+            role="alert"
+            className="mb-6 bg-red-100 border-l-4 border-red-500 text-red-700 p-3 sm:p-4 rounded-md shadow"
           >
-            {spinning && !selectedStudent && (
-              <span className="text-gray-500 text-lg">...</span>
-            )}
-            {!spinning && selectedStudent && (
-              <div className="text-center animate-popIn">
-                <div className="text-5xl font-bold text-sky-600">
-                  {selectedStudent.number}
-                </div>
-                <div className="text-2xl text-gray-700 mt-1">
-                  {selectedStudent.name}
-                </div>
-              </div>
-            )}
-            {!spinning && !selectedStudent && (
-              <span className="text-gray-400 text-sm">Pronto?</span>
-            )}
+            <p className="font-bold">Attenzione:</p>
+            <p className="text-sm sm:text-base">{error}</p>
           </div>
-          <button
-            onClick={handleRandomSelection}
-            disabled={spinning || students.length === 0}
-            className="px-8 py-4 bg-gradient-to-r from-sky-500 to-cyan-400 text-white text-lg font-semibold rounded-lg shadow-lg hover:from-sky-600 hover:to-cyan-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-300 transform hover:scale-105 disabled:transform-none"
-          >
-            {spinning
-              ? "Selezionando..."
-              : students.length === 0
-              ? "Aggiungi Studenti"
-              : "Seleziona Studente Casuale"}
-          </button>
-        </section>
+        )}
 
-        {/* Students Management Area */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          <section className="bg-white p-6 sm:p-8 rounded-xl shadow-2xl">
-            <h2 className="text-2xl font-semibold text-gray-700 mb-6">
-              Studenti{" "}
-              <span className="text-base font-normal text-gray-500">
-                ({students.length})
-              </span>
-            </h2>
-            {students.length === 0 ? (
-              <p className="text-center text-gray-500 py-6">
-                Nessuno studente in questa classe. Aggiungine alcuni.
-              </p>
-            ) : (
-              <ul className="space-y-3 max-h-96 overflow-y-auto pr-2">
-                {students.map((student) => (
-                  <li
-                    key={student.id}
-                    className="flex items-center justify-between p-4 bg-slate-50 hover:bg-slate-100 rounded-lg shadow-sm transition-colors duration-200 group"
-                  >
-                    <div className="flex items-center">
-                      <span className="mr-4 px-3 py-1 bg-sky-100 text-sky-700 text-sm font-semibold rounded-full">
-                        {student.number}
-                      </span>
-                      <span className="text-gray-800 font-medium">
-                        {student.name}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteStudent(student.id)}
-                      className="ml-4 text-red-500 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-                      title="Elimina studente"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-5 w-5"
-                        viewBox="0 0 20 20"
-                        fill="currentColor"
-                      >
-                        <path
-                          fillRule="evenodd"
-                          d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
-                          clipRule="evenodd"
-                        />
-                      </svg>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="bg-white p-6 sm:p-8 rounded-xl shadow-2xl">
-            <form onSubmit={handleAddStudent} className="space-y-5">
-              <h3 className="text-2xl font-semibold text-gray-700 mb-1">
-                Aggiungi Studente
-              </h3>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
+          {/* Colonna Sinistra: Configurazione Slot e Idoneità */}
+          <div className="lg:col-span-1 space-y-6 sm:space-y-8">
+            <section className="p-3 sm:p-4 bg-white rounded-xl shadow-xl">
+              <h2 className="text-lg sm:text-xl font-semibold text-gray-700 mb-3">
+                Imposta Estrazione
+              </h2>
               <div>
-                <label htmlFor="newStudentName" className="sr-only">
-                  Nome dello studente
+                <label
+                  htmlFor="numToSelectSlots"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  N. studenti da estrarre:
                 </label>
-                <input
-                  id="newStudentName"
-                  type="text"
-                  value={newStudentName}
-                  onChange={(e) => setNewStudentName(e.target.value)}
-                  placeholder="Es. Mario Rossi"
-                  required
-                  className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition-shadow duration-300 focus:shadow-lg"
-                />
+                <select
+                  id="numToSelectSlots"
+                  value={numToSelect}
+                  onChange={(e) => {
+                    const newN = parseInt(e.target.value, 10);
+                    setNumToSelect(newN);
+                    setSelectedStudentsDisplay(null);
+                  }}
+                  disabled={spinning || students.length === 0}
+                  className="mt-1 block w-full pl-3 pr-8 py-2 text-sm sm:text-base border-gray-300 focus:outline-none focus:ring-sky-500 focus:border-sky-500 rounded-md disabled:bg-gray-100"
+                >
+                  {students.length > 0 ? (
+                    Array.from(
+                      { length: Math.min(students.length, 10) },
+                      (_, i) => i + 1
+                    ).map((num) => (
+                      <option key={num} value={num}>
+                        {num}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="1" disabled>
+                      N/A
+                    </option>
+                  )}
+                </select>
               </div>
-              <button
-                type="submit"
-                className="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-base font-medium text-white bg-gradient-to-r from-sky-600 to-cyan-600 hover:from-sky-700 hover:to-cyan-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 transition-all duration-300 transform hover:scale-105"
-              >
-                Aggiungi Studente
-              </button>
-            </form>
-          </section>
+            </section>
+
+            {numToSelect > 0 &&
+              students.length > 0 &&
+              eligibilityPerSlot.length === numToSelect && (
+                <section className="p-3 sm:p-4 bg-white rounded-xl shadow-xl">
+                  <h3 className="text-md sm:text-lg font-semibold text-gray-700 mb-3">
+                    Configura Idoneità per Slot
+                  </h3>
+                  <div className="flex flex-wrap gap-2 mb-3 border-b pb-3 items-center">
+                    {Array.from({ length: numToSelect }, (_, i) => i).map(
+                      (slotIndex) => (
+                        <button
+                          key={slotIndex}
+                          onClick={() =>
+                            setCurrentConfiguringSlotIndex(slotIndex)
+                          }
+                          className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition-colors ${
+                            currentConfiguringSlotIndex === slotIndex
+                              ? "bg-sky-600 text-white shadow-md"
+                              : "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                          }`}
+                        >
+                          {slotIndex + 1}° Estratto{" "}
+                          <span className="text-xs opacity-80">
+                            ({eligibilityPerSlot[slotIndex]?.size || 0})
+                          </span>
+                        </button>
+                      )
+                    )}
+                  </div>
+                  {eligibilityPerSlot[currentConfiguringSlotIndex] !==
+                  undefined ? (
+                    <>
+                      <h4 className="text-sm font-medium text-gray-600 mb-2">
+                        Idonei per{" "}
+                        <span className="font-bold text-sky-600">
+                          {currentConfiguringSlotIndex + 1}° Estratto
+                        </span>
+                        :
+                      </h4>
+                      <ul className="space-y-1.5 max-h-80 overflow-y-auto custom-scrollbar pr-1.5">
+                        {students.map((student) => (
+                          <li
+                            key={`${student.id}-slot-${currentConfiguringSlotIndex}`}
+                            className={`flex items-center p-2 rounded-md hover:bg-gray-100 transition-colors text-sm ${
+                              currentEligibleSetForConfig.has(student.id)
+                                ? "bg-green-50"
+                                : "bg-red-50 opacity-80"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              id={`s-${currentConfiguringSlotIndex}-${student.id}`}
+                              checked={currentEligibleSetForConfig.has(
+                                student.id
+                              )}
+                              onChange={() =>
+                                handleToggleEligibilityForSlot(student.id)
+                              }
+                              className="form-checkbox h-4 w-4 sm:h-5 sm:w-5 text-sky-600 border-gray-300 rounded focus:ring-sky-500 cursor-pointer mr-2 sm:mr-2.5 shrink-0"
+                            />
+                            <label
+                              htmlFor={`s-${currentConfiguringSlotIndex}-${student.id}`}
+                              className="flex items-center cursor-pointer w-full"
+                            >
+                              <span className="mr-1.5 sm:mr-2 px-1.5 sm:px-2 py-0.5 bg-gray-200 text-gray-600 text-xs font-semibold rounded-full shrink-0">
+                                {student.number}
+                              </span>
+                              <span className="text-gray-700 truncate">
+                                {student.name}
+                              </span>
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="text-sm text-gray-500">
+                      Caricamento configurazione slot...
+                    </p>
+                  )}
+                </section>
+              )}
+          </div>
+
+          {/* Colonna Destra: Esecuzione Estrazione e Elenco Studenti Classe */}
+          <div className="lg:col-span-2 space-y-6 sm:space-y-8">
+            <section className="bg-white p-4 sm:p-6 rounded-xl shadow-xl text-center">
+              <h2 className="text-xl sm:text-2xl font-semibold text-gray-700 mb-4">
+                Esegui Estrazione
+              </h2>
+              {students.length === 0 ? (
+                <p className="text-gray-500 py-3">
+                  Aggiungi studenti per estrarre.
+                </p>
+              ) : (
+                <>
+                  {/* Visualizzazione Semplificata (funzionante) */}
+                  <div className="min-h-[10rem] w-full max-w-md mx-auto border-2 border-dashed border-gray-300 rounded-lg p-3 sm:p-4 text-center">
+                    {spinning && (
+                      <p className="text-sky-500 text-lg">Attendere...</p>
+                    )}
+                    {!spinning &&
+                      selectedStudentsDisplay &&
+                      selectedStudentsDisplay.length > 0 && (
+                        <div>
+                          <h3
+                            className="text-lg font-semibold mb-2"
+                            style={{ color: "darkgreen" }}
+                          >
+                            Studenti Estratti:
+                          </h3>
+                          {selectedStudentsDisplay.map((student, index) => (
+                            <div
+                              key={student.id}
+                              className="my-1 p-2 border border-gray-200 bg-green-50 rounded"
+                            >
+                              <p className="text-md font-bold text-green-700">
+                                {index + 1}. {student.name} (N. {student.number}
+                                )
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    {!spinning &&
+                      (!selectedStudentsDisplay ||
+                        selectedStudentsDisplay.length === 0) && (
+                        <p className="text-gray-500 text-sm">
+                          Pronto per estrarre {numToSelect} student
+                          {numToSelect === 1 ? "e" : "i"}?
+                        </p>
+                      )}
+                  </div>
+
+                  <button
+                    onClick={handleRandomSelection}
+                    disabled={
+                      spinning ||
+                      students.length === 0 ||
+                      numToSelect <= 0 ||
+                      eligibilityPerSlot.length !== numToSelect ||
+                      eligibilityPerSlot.some(
+                        (slot) => !slot || slot.size === 0
+                      )
+                    }
+                    className="mt-4 sm:mt-6 px-5 py-2.5 sm:px-6 sm:py-3 bg-gradient-to-r from-sky-500 to-cyan-400 text-white text-sm sm:text-base font-semibold rounded-lg shadow-lg hover:from-sky-600 hover:to-cyan-500 disabled:opacity-60 disabled:cursor-not-allowed transition-all transform hover:scale-105"
+                  >
+                    {spinning
+                      ? "Estrazione..."
+                      : `Estrai ${numToSelect} ${
+                          numToSelect === 1 ? "Studente" : "Studenti"
+                        }`}
+                  </button>
+                  <button
+                    onClick={handleShowDisplay}
+                    className="mt-4 sm:mt-6 ml-2 sm:ml-3 px-3 py-2 sm:px-4 sm:py-2.5 text-xs sm:text-sm text-sky-600 border border-sky-500 rounded-md hover:bg-sky-50 transition"
+                  >
+                    Visualizza &rarr;
+                  </button>
+                </>
+              )}
+            </section>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
+              <section className="bg-white p-3 sm:p-4 rounded-xl shadow-xl">
+                <h3 className="text-md sm:text-lg font-semibold text-gray-700 mb-3">
+                  Elenco Studenti Classe ({students.length})
+                </h3>
+                {students.length === 0 ? (
+                  <p className="text-center text-sm text-gray-500 py-2">
+                    Nessuno studente in questa classe.
+                  </p>
+                ) : (
+                  <ul className="space-y-1.5 max-h-72 overflow-y-auto custom-scrollbar pr-1.5">
+                    {students.map((student) => (
+                      <li
+                        key={student.id}
+                        className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-md group text-sm"
+                      >
+                        <div className="flex items-center truncate mr-2">
+                          <span className="mr-2 px-2 py-0.5 bg-sky-100 text-sky-700 text-xs font-semibold rounded-full shrink-0">
+                            {student.number}
+                          </span>
+                          <span
+                            className="text-gray-800 font-medium truncate"
+                            title={student.name}
+                          >
+                            {student.name}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() =>
+                            handleDeleteStudentFromClass(student.id)
+                          }
+                          className="text-red-500 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                          title="Elimina studente dalla classe"
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="h-4 w-4 sm:h-5 sm:w-5"
+                            viewBox="0 0 20 20"
+                            fill="currentColor"
+                          >
+                            <path
+                              fillRule="evenodd"
+                              d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+              <section className="bg-white p-3 sm:p-4 rounded-xl shadow-xl">
+                <h3 className="text-md sm:text-lg font-semibold text-gray-700 mb-3">
+                  Aggiungi Studente alla Classe
+                </h3>
+                <form onSubmit={handleAddStudentToClass} className="space-y-3">
+                  <div>
+                    <label htmlFor="newStudentNameForClass" className="sr-only">
+                      Nome studente
+                    </label>
+                    <input
+                      id="newStudentNameForClass"
+                      type="text"
+                      value={newStudentNameForClass}
+                      onChange={(e) =>
+                        setNewStudentNameForClass(e.target.value)
+                      }
+                      placeholder="Es. Laura Bianchi"
+                      required
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-sky-500 focus:border-sky-500 sm:text-sm"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full bg-sky-500 hover:bg-sky-600 text-white font-semibold py-2 px-3 rounded-md shadow-sm transition text-sm"
+                  >
+                    Aggiungi Studente
+                  </button>
+                </form>
+              </section>
+            </div>
+          </div>
         </div>
       </div>
-      <style>
-        {`
-        @keyframes popIn {
-            0% { transform: scale(0.5); opacity: 0; }
-            70% { transform: scale(1.05); opacity: 1; }
-            100% { transform: scale(1); }
-        }
-        .animate-popIn {
-            animation: popIn 0.5s cubic-bezier(0.68, -0.55, 0.27, 1.55) forwards;
-        }
-        `}
-      </style>
+      <style>{`
+        /* Stili per la scrollbar, puoi rimuovere se non ti piace */
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; height: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cdd5dd; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #b8c2cc; }
+      `}</style>
     </div>
   );
 };

@@ -1,19 +1,27 @@
 // src/pages/Display.tsx
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { db } from "../firebase/config"; // Ensure this path is correct
+import { db } from "../firebase/config"; // Assicurati che il percorso sia corretto
 import { doc, onSnapshot, Timestamp } from "firebase/firestore";
 
-interface Selection {
+interface StudentDisplayInfo {
   studentId: string;
   studentName: string;
   studentNumber: number;
-  timestamp: Timestamp; // Firestore timestamp
+}
+
+interface MultiSelectionDoc {
+  selectedStudentsList: StudentDisplayInfo[];
+  timestamp: Timestamp;
+  extractionPoolName?: string; // Opzionale, se Settings.tsx lo salvasse
+  classroomName?: string; // Opzionale, se Settings.tsx lo salvasse
 }
 
 const Display: React.FC = () => {
   const { classroomId } = useParams<{ classroomId: string }>();
-  const [selection, setSelection] = useState<Selection | null>(null);
+  // Stato per contenere l'intero documento con la lista di studenti
+  const [currentSelectionDoc, setCurrentSelectionDoc] =
+    useState<MultiSelectionDoc | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,21 +33,40 @@ const Display: React.FC = () => {
     }
 
     setLoading(true);
+    setError(null); // Resetta errore ad ogni cambio di classroomId o refresh
+    const selectionDocRef = doc(db, "selections", classroomId);
+
     const unsubscribe = onSnapshot(
-      doc(db, "selections", classroomId),
+      selectionDocRef,
       (docSnapshot) => {
         if (docSnapshot.exists()) {
-          setSelection(docSnapshot.data() as Selection);
-          setError(null);
+          const data = docSnapshot.data() as MultiSelectionDoc; // Cast alla nuova struttura
+          // Verifica che selectedStudentsList esista, sia un array e non sia vuoto
+          if (
+            data.selectedStudentsList &&
+            Array.isArray(data.selectedStudentsList) &&
+            data.selectedStudentsList.length > 0
+          ) {
+            setCurrentSelectionDoc(data);
+            setError(null);
+          } else {
+            // I dati esistono ma non hanno il formato atteso o la lista è vuota
+            console.warn(
+              "Display.tsx: Documento trovato ma selectedStudentsList è mancante, non un array, o vuoto. Dati:",
+              data
+            );
+            setCurrentSelectionDoc(null);
+            // Non impostare un errore qui, "In attesa..." è più appropriato se la lista è vuota intenzionalmente
+          }
         } else {
-          setSelection(null);
-          //setError("Nessuna selezione trovata per questa classe."); // Or just show "In attesa..."
+          // console.log("Display.tsx: Nessun documento di selezione trovato per classroomId:", classroomId);
+          setCurrentSelectionDoc(null);
         }
         setLoading(false);
       },
       (err) => {
-        console.error("Error listening to selection:", err);
-        setError("Errore nel caricamento della selezione.");
+        console.error("Error listening to selection document:", err);
+        setError("Errore nel caricamento della selezione in tempo reale.");
         setLoading(false);
       }
     );
@@ -52,12 +79,21 @@ const Display: React.FC = () => {
   if (loading) {
     content = (
       <div className="animate-pulse text-5xl font-semibold text-gray-400">
-        Caricamento...
+        Caricamento Visualizzazione...
       </div>
     );
   } else if (error) {
-    content = <div className="text-4xl font-bold text-red-400">{error}</div>;
-  } else if (!selection) {
+    content = (
+      <div className="text-4xl font-bold text-red-400 p-8 bg-red-100 rounded-lg shadow-xl">
+        {error}
+      </div>
+    );
+  } else if (
+    !currentSelectionDoc ||
+    !currentSelectionDoc.selectedStudentsList ||
+    currentSelectionDoc.selectedStudentsList.length === 0
+  ) {
+    // Questo blocco ora copre il caso di documento non esistente, o esistente ma con selectedStudentsList vuota/malformata
     content = (
       <div className="text-center">
         <h1 className="text-5xl md:text-6xl font-bold text-gray-300 opacity-75">
@@ -86,28 +122,58 @@ const Display: React.FC = () => {
       </div>
     );
   } else {
+    // Visualizzazione per più studenti (o singolo se la lista ne contiene uno)
     content = (
-      <div className="text-center bg-white bg-opacity-10 backdrop-blur-md p-8 sm:p-12 md:p-16 rounded-xl shadow-2xl transform scale-100 animate-fadeIn">
+      <div className="text-center bg-white bg-opacity-10 backdrop-filter backdrop-blur-lg p-6 sm:p-8 md:p-10 rounded-2xl shadow-2xl w-full max-w-2xl lg:max-w-4xl animate-fadeInOverall">
+        {currentSelectionDoc.classroomName && (
+          <h2 className="text-2xl sm:text-3xl font-semibold text-gray-200 mb-1">
+            Classe: {currentSelectionDoc.classroomName}
+          </h2>
+        )}
+        {currentSelectionDoc.extractionPoolName && ( // Mostra se Settings.tsx lo salvasse
+          <h3 className="text-xl sm:text-2xl font-medium text-purple-300 mb-5 sm:mb-8">
+            Gruppo Estrazione: {currentSelectionDoc.extractionPoolName}
+          </h3>
+        )}
+
         <div
-          className="text-8xl sm:text-9xl md:text-[10rem] font-extrabold text-yellow-400 transition-transform duration-500 ease-out"
-          style={{
-            WebkitTextStroke: "2px black",
-            textShadow:
-              "3px 3px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
-          }}
-          key={selection.studentId + "_number"} // Force re-render for animation
+          className={`space-y-5 sm:space-y-6 max-h-[70vh] overflow-y-auto custom-scrollbar pr-2 ${
+            currentSelectionDoc.selectedStudentsList.length === 1
+              ? "flex flex-col items-center justify-center"
+              : ""
+          }`}
         >
-          {selection.studentNumber}
+          {currentSelectionDoc.selectedStudentsList.map((student, index) => (
+            <div
+              key={student.studentId || index} // studentId dovrebbe essere sempre presente
+              className="py-4 px-2 bg-white bg-opacity-5 hover:bg-opacity-10 rounded-lg transition-all duration-300 animate-fadeInItem"
+              style={{ animationDelay: `${index * 0.18}s` }} // Animazione sfalsata per ogni studente
+            >
+              <div
+                className="text-6xl sm:text-7xl md:text-8xl font-extrabold text-yellow-400"
+                // Stili per il numero (come prima, puoi adattarli)
+                style={{
+                  WebkitTextStroke: "1.5px black",
+                  textShadow:
+                    "2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
+                }}
+              >
+                {student.studentNumber}
+              </div>
+              <div
+                className="mt-1 sm:mt-2 text-3xl sm:text-4xl md:text-5xl font-semibold text-white"
+                // Stili per il nome (come prima, puoi adattarli)
+                style={{ textShadow: "1.5px 1.5px 3px rgba(0,0,0,0.75)" }}
+              >
+                {student.studentName}
+              </div>
+            </div>
+          ))}
         </div>
-        <div
-          className="mt-4 text-5xl sm:text-6xl md:text-7xl font-semibold text-white transition-opacity duration-700 ease-in-out"
-          style={{ textShadow: "2px 2px 4px rgba(0,0,0,0.7)" }}
-          key={selection.studentId + "_name"} // Force re-render for animation
-        >
-          {selection.studentName}
-        </div>
-        <p className="text-sm text-gray-300 mt-6">
-          Selezionato il: {selection.timestamp?.toDate().toLocaleString()}
+
+        <p className="text-xs sm:text-sm text-gray-400 mt-6 sm:mt-8">
+          Estrazione del:{" "}
+          {currentSelectionDoc.timestamp?.toDate().toLocaleString("it-IT")}
         </p>
       </div>
     );
@@ -118,13 +184,26 @@ const Display: React.FC = () => {
       {content}
       <style>
         {`
-        @keyframes fadeIn {
-          from { opacity: 0; transform: scale(0.9); }
+        @keyframes fadeInOverall {
+          from { opacity: 0; transform: scale(0.95); }
           to { opacity: 1; transform: scale(1); }
         }
-        .animate-fadeIn {
-          animation: fadeIn 0.7s ease-out forwards;
+        .animate-fadeInOverall {
+          animation: fadeInOverall 0.6s ease-out forwards;
         }
+        @keyframes fadeInItem { /* Animazione per i singoli studenti */
+          from { opacity: 0; transform: translateY(25px) scale(0.98); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .animate-fadeInItem {
+          opacity: 0; /* Inizia invisibile, l'animazione lo rende visibile */
+          animation: fadeInItem 0.6s ease-out forwards;
+          animation-fill-mode: forwards; /* Mantiene lo stato finale dell'animazione */
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
         `}
       </style>
     </div>
