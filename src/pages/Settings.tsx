@@ -99,6 +99,9 @@ const Settings: React.FC = () => {
 
   useEffect(() => {
     if (isLoading && students.length === 0) {
+      // This part handles re-initializing eligibilityPerSlot to empty sets
+      // if numToSelect changes while still loading and before students are fetched.
+      // This can remain as is.
       if (
         numToSelect > 0 &&
         (!eligibilityPerSlot ||
@@ -113,18 +116,33 @@ const Settings: React.FC = () => {
     }
 
     const studentIdsInClass = new Set(students.map((s) => s.id));
+
     setEligibilityPerSlot((prevSlots) => {
       const newCalculatedSlots = Array.from({ length: numToSelect }, (_, i) => {
         const existingSlotMembers = prevSlots[i];
+
         if (existingSlotMembers && i < prevSlots.length) {
-          return new Set(
-            [...existingSlotMembers].filter((id) => studentIdsInClass.has(id))
-          );
+          // If the slot previously existed:
+          // - If it already had members, or if there are no students in the class,
+          //   then filter its current members against the (potentially updated) student list.
+          // - If it existed but was empty AND there ARE students in the class,
+          //   then populate it with all students (this is the key change for slot 0).
+          if (existingSlotMembers.size > 0 || studentIdsInClass.size === 0) {
+            return new Set(
+              [...existingSlotMembers].filter((id) => studentIdsInClass.has(id))
+            );
+          } else {
+            // Slot existed, was empty, but there are students in class. Populate it.
+            return new Set(studentIdsInClass);
+          }
+        } else {
+          // This is a new slot (e.g., numToSelect increased, or prevSlots was shorter).
+          // Initialize with all students from the current class list.
+          return new Set(studentIdsInClass);
         }
-        return new Set(studentIdsInClass);
       });
       return newCalculatedSlots;
-    });
+    }); // This logic for adjusting the currently configured slot index can remain as is.
 
     if (numToSelect > 0) {
       if (
@@ -136,7 +154,7 @@ const Settings: React.FC = () => {
     } else {
       setCurrentConfiguringSlotIndex(0); // Default to 0 if numToSelect is 0 or less
     }
-  }, [numToSelect, students, isLoading]); // Removed eligibilityPerSlot from deps to avoid potential loop, ensure logic is sound
+  }, [numToSelect, students, isLoading]); // Removed eligibilityPerSlot from deps as we use functional updates for setEligibilityPerSlot
 
   const handleToggleEligibilityForSlot = (studentId: string) => {
     if (
@@ -187,6 +205,32 @@ const Settings: React.FC = () => {
           : slotEligibles
       )
     );
+  };
+
+  const handleCopyFirstSlotEligibilityToOthers = () => {
+    if (
+      numToSelect <= 1 ||
+      !eligibilityPerSlot[0] ||
+      students.length === 0 ||
+      spinning
+    ) {
+      // Button should ideally be disabled, but this is a safeguard
+      return;
+    }
+
+    const firstSlotEligibilitySnapshot = new Set(eligibilityPerSlot[0]); // Get a stable copy
+
+    setEligibilityPerSlot((prevEligibility) => {
+      return prevEligibility.map((currentSlotSet, index) => {
+        if (index === 0) {
+          return currentSlotSet; // The first slot remains as is
+        }
+        // For all other slots, apply a new Set instance with the first slot's eligibility
+        return new Set(firstSlotEligibilitySnapshot);
+      });
+    });
+    // Optionally, clear any general error messages if you have a generic error state for this section
+    // setError(null);
   };
 
   const handleAddStudentToClass = async (e: React.FormEvent) => {
@@ -558,6 +602,20 @@ const Settings: React.FC = () => {
                       )
                     )}
                   </div>
+                  {numToSelect > 1 && eligibilityPerSlot[0] && (
+                    <div className="mb-4">
+                      {" "}
+                      {/* Add some margin below */}
+                      <button
+                        onClick={handleCopyFirstSlotEligibilityToOthers}
+                        disabled={spinning || students.length === 0}
+                        className="w-full px-3 py-2 text-xs sm:text-sm font-semibold text-white bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-600 hover:to-cyan-500 rounded-lg shadow-lg disabled:opacity-60 disabled:cursor-not-allowed transition-all transform hover:scale-105"
+                        title="Copia la configurazione di idoneità del primo slot a tutti gli altri slot"
+                      >
+                        Copia Idoneità 1° Slot agli Altri
+                      </button>
+                    </div>
+                  )}
                   {eligibilityPerSlot[currentConfiguringSlotIndex] !==
                   undefined ? (
                     <>
