@@ -755,7 +755,7 @@ const Settings: React.FC = () => {
                             {student.name}
                           </span>
                         </div>
-                        <div className="flex items-center space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <div className="flex items-center space-x-0.5 shrink-0">
                           <button
                             onClick={() => handleMoveStudent(student.id, "up")}
                             disabled={index === 0 || spinning}
