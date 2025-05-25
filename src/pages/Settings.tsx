@@ -469,7 +469,6 @@ const Settings: React.FC = () => {
   };
 
   const handleShowDisplay = () => {
-    // ... (your existing handleShowDisplay function, unchanged)
     if (!classroomId) {
       setError("ID classe non trovato.");
       return;

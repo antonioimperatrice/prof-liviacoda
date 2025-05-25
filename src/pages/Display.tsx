@@ -1,8 +1,9 @@
 // src/pages/Display.tsx
-import React, { useEffect, useState, useRef } from "react"; // Aggiunto useRef
+import React, { useEffect, useState, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { db } from "../firebase/config";
 import { doc, onSnapshot, Timestamp } from "firebase/firestore";
+import displayImage from "../assets/display.svg";
 
 interface StudentDisplayInfo {
   studentId: string;
@@ -35,6 +36,35 @@ const Display: React.FC = () => {
   const animationIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Function to convert numbers to Roman numerals
+  const toRomanNumeral = (num: number): string => {
+    const values = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1];
+    const numerals = [
+      "M",
+      "CM",
+      "D",
+      "CD",
+      "C",
+      "XC",
+      "L",
+      "XL",
+      "X",
+      "IX",
+      "V",
+      "IV",
+      "I",
+    ];
+
+    let result = "";
+    for (let i = 0; i < values.length; i++) {
+      while (num >= values[i]) {
+        result += numerals[i];
+        num -= values[i];
+      }
+    }
+    return result;
+  };
+
   useEffect(() => {
     if (!classroomId) {
       setError("ID classe non specificato.");
@@ -55,23 +85,20 @@ const Display: React.FC = () => {
             data.selectedStudentsList &&
             Array.isArray(data.selectedStudentsList)
           ) {
-            // Confronta il timestamp per vedere se è una nuova estrazione
             if (
               revealedSelection?.timestamp?.toMillis() !==
               data.timestamp?.toMillis()
             ) {
               setSelectionFromFirestore(data);
-              // Se la nuova selezione è vuota (es. pulizia da Settings), rivelala subito senza spin.
               if (data.selectedStudentsList.length === 0) {
                 setRevealedSelection(data);
               } else {
-                setRevealedSelection(null); // Richiede un nuovo spin per essere rivelata
+                setRevealedSelection(null);
               }
             } else if (
               !revealedSelection &&
               data.selectedStudentsList.length > 0
             ) {
-              // Caso: caricamento iniziale con dati già presenti e non ancora rivelati
               setSelectionFromFirestore(data);
               setRevealedSelection(null);
             }
@@ -92,15 +119,14 @@ const Display: React.FC = () => {
       }
     );
     return () => unsubscribe();
-  }, [classroomId, revealedSelection]); // Aggiunto revealedSelection per il confronto timestamp
+  }, [classroomId, revealedSelection]);
 
-  // Effetto per l'animazione dei numeri/simboli
   useEffect(() => {
     if (isAnimating) {
-      setAnimatingDisplayValue(Math.floor(Math.random() * 90) + 10); // Numero casuale a 2 cifre
+      setAnimatingDisplayValue(Math.floor(Math.random() * 90) + 10);
       animationIntervalRef.current = setInterval(() => {
         setAnimatingDisplayValue(Math.floor(Math.random() * 90) + 10);
-      }, 100); // Cambia ogni 100ms
+      }, 100);
     } else {
       if (animationIntervalRef.current) {
         clearInterval(animationIntervalRef.current);
@@ -112,7 +138,6 @@ const Display: React.FC = () => {
     };
   }, [isAnimating]);
 
-  // Cleanup timeouts se il componente smonta
   useEffect(() => {
     return () => {
       if (animationTimeoutRef.current)
@@ -130,48 +155,55 @@ const Display: React.FC = () => {
       return;
 
     setIsAnimating(true);
-    setError(null); // Pulisce eventuali errori precedenti
+    setError(null);
 
-    // Cancella timeout precedente se l'utente clicca di nuovo velocemente (improbabile con UI attuale)
     if (animationTimeoutRef.current) clearTimeout(animationTimeoutRef.current);
 
     animationTimeoutRef.current = setTimeout(() => {
       setIsAnimating(false);
-      setRevealedSelection(selectionFromFirestore); // Rivela la selezione
+      setRevealedSelection(selectionFromFirestore);
       if (animationIntervalRef.current)
-        clearInterval(animationIntervalRef.current); // Ferma l'intervallo dei numeri
-    }, 3000); // Durata dell'animazione di "spin"
+        clearInterval(animationIntervalRef.current);
+    }, 3000);
   };
 
   let content;
 
   if (loading) {
     content = (
-      <div className="animate-pulse text-5xl font-semibold text-gray-400">
-        {" "}
-        Caricamento...{" "}
+      <div className="animate-pulse text-5xl font-serif font-bold text-gray-300">
+        🏛️ Caricamento Arena... 🏛️
       </div>
     );
   } else if (error) {
     content = (
-      <div className="text-4xl font-bold text-red-400 p-8 bg-red-100 rounded-lg shadow-xl">
-        {error}
+      <div className="text-4xl font-bold text-red-800 p-8 bg-red-100 bg-opacity-90 rounded-lg shadow-xl border-4 border-red-700">
+        ⚔️ {error} ⚔️
       </div>
     );
   } else if (isAnimating) {
     content = (
       <div className="text-center p-6 sm:p-8 md:p-10">
+        <div className="mb-6">
+          <h2 className="text-3xl sm:text-4xl font-serif font-bold text-gray-300 mb-2">
+            🏛️ L'ARENA 🏛️
+          </h2>
+        </div>
+
         <div
-          className="text-8xl sm:text-9xl md:text-[12rem] font-extrabold text-purple-400 transition-all duration-100"
+          className="text-8xl sm:text-9xl md:text-[12rem] font-extrabold text-amber-600 transition-all duration-100 font-serif"
           style={{
-            WebkitTextStroke: "2px black",
-            textShadow: "3px 3px 0 #1a072e",
+            WebkitTextStroke: "3px #8B4513",
+            textShadow: "5px 5px 0 #654321, 3px 3px 0 #8B4513",
           }}
         >
-          {animatingDisplayValue}
+          {typeof animatingDisplayValue === "number"
+            ? toRomanNumeral(animatingDisplayValue)
+            : animatingDisplayValue}
         </div>
-        <p className="text-3xl sm:text-4xl text-white mt-4 animate-pulse">
-          Estrazione in corso...
+
+        <p className="text-2xl sm:text-3xl text-gray-300 font-serif animate-pulse mt-4">
+          ⚔️ Gli Dei stanno scegliendo... ⚔️
         </p>
       </div>
     );
@@ -179,22 +211,28 @@ const Display: React.FC = () => {
     revealedSelection &&
     revealedSelection.selectedStudentsList.length > 0
   ) {
-    // Mostra gli studenti rivelati
     content = (
-      <div className="text-center bg-white bg-opacity-10 backdrop-filter backdrop-blur-lg p-6 sm:p-8 md:p-10 rounded-2xl shadow-2xl w-full max-w-2xl lg:max-w-4xl animate-fadeInOverall">
-        {revealedSelection.classroomName && (
-          <h2 className="text-2xl sm:text-3xl font-semibold text-gray-200 mb-1">
-            Classe: {revealedSelection.classroomName}
-          </h2>
-        )}
-        {/* Puoi aggiungere extractionPoolName se lo passi da Settings
-        {revealedSelection.extractionPoolName && (
-          <h3 className="text-xl sm:text-2xl font-medium text-purple-300 mb-5 sm:mb-8">
-            Gruppo: {revealedSelection.extractionPoolName}
-          </h3>
-        )}*/}
+      <div className="text-center bg-amber-100 bg-opacity-20 backdrop-filter backdrop-blur-lg p-6 sm:p-8 md:p-10 rounded-2xl shadow-2xl w-full max-w-2xl lg:max-w-4xl animate-fadeInOverall border-4 border-amber-700">
+        <div className="mb-6">
+          <div className="flex justify-center items-center text-4xl mb-2">
+            <span className="text-amber-600">🏛️</span>
+            {revealedSelection.classroomName && (
+              <h2 className="text-2xl sm:text-3xl font-serif font-bold text-amber-800 mb-1">
+                {revealedSelection.classroomName}
+              </h2>
+            )}
+            <span className="text-amber-600">🏛️</span>
+          </div>
+
+          <div className="flex justify-center items-center text-lg text-amber-700 font-serif">
+            <span>🏺</span>
+            <span className="mx-2">Gli Eletti del Fato</span>
+            <span>🏺</span>
+          </div>
+        </div>
+
         <div
-          className={`space-y-5 sm:space-y-6 max-h-[70vh] overflow-y-auto custom-scrollbar pr-2 ${
+          className={`space-y-5 sm:space-y-6 max-h-[70vh] overflow-y-auto custom-roman-scrollbar pr-2 ${
             revealedSelection.selectedStudentsList.length === 1
               ? "flex flex-col items-center justify-center"
               : ""
@@ -203,42 +241,62 @@ const Display: React.FC = () => {
           {revealedSelection.selectedStudentsList.map((student, index) => (
             <div
               key={student.studentId || index}
-              className="py-4 px-2 bg-white bg-opacity-5 hover:bg-opacity-10 rounded-lg transition-all duration-300 animate-fadeInItem"
-              style={{ animationDelay: `${index * 0.25}s` }}
+              className="py-4 px-2 rounded-lg transition-all duration-300"
+              style={{
+                background:
+                  "linear-gradient(135deg, rgba(252, 211, 77, 0.9) 0%, rgba(245, 158, 11, 0.8) 100%)",
+                border: "3px solid #92400e",
+                boxShadow: "0 10px 25px rgba(139, 69, 19, 0.3)",
+              }}
             >
               <div
-                className="text-6xl sm:text-7xl md:text-8xl font-extrabold text-yellow-400"
+                className="text-6xl sm:text-7xl md:text-8xl font-extrabold text-amber-800 font-serif animate-fadeInItem"
                 style={{
-                  WebkitTextStroke: "1.5px black",
-                  textShadow:
-                    "2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
+                  WebkitTextStroke: "2px #92400e",
+                  textShadow: "4px 4px 0 #78350f, 2px 2px 0 #92400e",
+                  animationDelay: `${index * 0.1}s`, // Immediate appearance, just slight stagger between students
                 }}
               >
-                {student.studentNumber}
+                {toRomanNumeral(student.studentNumber)}
               </div>
               <div
-                className="mt-1 sm:mt-2 text-3xl sm:text-4xl md:text-5xl font-semibold text-white"
-                style={{ textShadow: "1.5px 1.5px 3px rgba(0,0,0,0.75)" }}
+                className="mt-1 sm:mt-2 text-3xl sm:text-4xl md:text-5xl font-bold text-amber-900 font-serif animate-fadeInName"
+                style={{
+                  textShadow: "2px 2px 4px rgba(139, 69, 19, 0.6)",
+                  animationDelay: `${index * 0.1 + 2}s`, // 2 seconds after the numeral
+                }}
               >
-                {student.studentName}
+                {student.studentName.toUpperCase()}
+              </div>
+
+              <div
+                className="flex justify-center items-center mt-3 space-x-2 animate-fadeInName"
+                style={{
+                  animationDelay: `${index * 0.1 + 2.3}s`, // Appears shortly after name
+                }}
+              >
+                <span className="text-amber-700">⚔️</span>
+                <div className="w-16 h-1 bg-amber-700 rounded"></div>
+                <span className="text-amber-700">⚔️</span>
               </div>
             </div>
           ))}
         </div>
-        <p className="text-xs sm:text-sm text-gray-400 mt-6 sm:mt-8">
-          Estrazione del:{" "}
+
+        <p className="text-xs sm:text-sm text-amber-800 font-serif mt-6 sm:mt-8">
+          <span className="font-bold">Decretum:</span>{" "}
           {revealedSelection.timestamp?.toDate().toLocaleString("it-IT")}
         </p>
-        {/* Bottone per "rigirare" se arriva una nuova estrazione non ancora svelata */}
+
         {selectionFromFirestore &&
           selectionFromFirestore.timestamp?.toMillis() !==
             revealedSelection.timestamp?.toMillis() &&
           selectionFromFirestore.selectedStudentsList.length > 0 && (
             <button
               onClick={handleSpin}
-              className="mt-8 px-8 py-3 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-lg shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-green-400 focus:ring-opacity-75"
+              className="mt-8 px-8 py-3 bg-amber-600 hover:bg-amber-700 text-white font-serif font-bold rounded-lg shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-opacity-75 border-2 border-amber-800"
             >
-              Nuova Estrazione Disponibile! Gira di Nuovo!
+              🏛️ Nuova Estrazione! Consulta l'Oracolo! 🏛️
             </button>
           )}
       </div>
@@ -248,29 +306,27 @@ const Display: React.FC = () => {
     selectionFromFirestore.selectedStudentsList.length > 0 &&
     !revealedSelection
   ) {
-    // C'è una selezione da Firestore, ma non è stata ancora rivelata (mostra il pulsante "Gira")
     content = (
       <div className="text-center p-10">
-        <h1 className="text-4xl sm:text-5xl font-bold text-white mb-10">
-          Pronto per l'Estrazione?
+        <h1 className="text-4xl sm:text-5xl font-serif font-bold text-gray-300 mb-10">
+          🏛️ Consulta gli Dei 🏛️
         </h1>
         <button
           onClick={handleSpin}
-          className="px-12 py-6 bg-purple-600 hover:bg-purple-700 text-white text-2xl sm:text-3xl font-bold rounded-full shadow-2xl transition-transform transform hover:scale-110 focus:outline-none focus:ring-4 focus:ring-purple-400 focus:ring-opacity-75 animate-pulse"
+          className="px-12 py-6 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white text-2xl sm:text-3xl font-serif font-bold rounded-full shadow-2xl transition-transform transform hover:scale-110 focus:outline-none focus:ring-4 focus:ring-amber-400 focus:ring-opacity-75 animate-pulse border-4 border-amber-800"
         >
-          GIRA LA RUOTA!
+          🏺 SCOPRI IL FUTURO 🏺
         </button>
       </div>
     );
   } else {
-    // Nessuna selezione valida da Firestore o lista vuota già rivelata
     content = (
       <div className="text-center">
-        <h1 className="text-5xl md:text-6xl font-bold text-gray-300 opacity-75">
-          In attesa di selezione...
+        <h1 className="text-5xl md:text-6xl font-serif font-bold text-gray-300 opacity-75">
+          🏛️ Arena in Attesa 🏛️
         </h1>
         <svg
-          className="w-24 h-24 text-gray-400 mx-auto mt-8 animate-spin"
+          className="w-24 h-24 text-amber-600 mx-auto mt-8 animate-spin"
           xmlns="http://www.w3.org/2000/svg"
           fill="none"
           viewBox="0 0 24 24"
@@ -294,17 +350,33 @@ const Display: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-tr from-gray-900 via-purple-900 to-gray-800 text-white flex flex-col items-center justify-center p-4 transition-colors duration-500">
-      {content}
+    <div className="min-h-screen bg-red-800 text-amber-900 flex flex-col items-center justify-center p-4 transition-colors duration-500 relative">
+      {/* SVG Background */}
+      <div
+        className="absolute inset-0 opacity-10"
+        style={{
+          backgroundImage: `url(${displayImage})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
+          filter: "sepia(100%) saturate(150%) hue-rotate(25deg)",
+        }}
+      />
+
+      {/* Content with higher z-index */}
+      <div className="relative z-10">{content}</div>
+
       <style>{`
         @keyframes fadeInOverall { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
         .animate-fadeInOverall { animation: fadeInOverall 0.6s ease-out forwards; }
-        @keyframes fadeInItem { from { opacity: 0; transform: translateY(25px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-        .animate-fadeInItem { opacity: 0; animation: fadeInItem 0.6s ease-out forwards; animation-fill-mode: forwards; }
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+        @keyframes fadeInItem { from { opacity: 0; } to { opacity: 1; } }
+        .animate-fadeInItem { opacity: 0; animation: fadeInItem 0.8s ease-out forwards; animation-fill-mode: forwards; }
+        @keyframes fadeInName { from { opacity: 0; } to { opacity: 1; } }
+        .animate-fadeInName { opacity: 0; animation: fadeInName 1s ease-out forwards; animation-fill-mode: forwards; }
+        .custom-roman-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-roman-scrollbar::-webkit-scrollbar-track { background: rgba(146, 64, 14, 0.1); border-radius: 10px; }
+        .custom-roman-scrollbar::-webkit-scrollbar-thumb { background: rgba(146, 64, 14, 0.6); border-radius: 10px; }
+        .custom-roman-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(146, 64, 14, 0.8); }
       `}</style>
     </div>
   );
