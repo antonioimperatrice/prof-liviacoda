@@ -9,14 +9,16 @@ import {
   Timestamp,
   doc,
   updateDoc,
-  deleteDoc,
   writeBatch,
+  query,
+  orderBy,
 } from "firebase/firestore";
 
 interface Classroom {
   id: string;
   name: string;
-  createdAt?: Timestamp; // Optional: if you store it
+  order: number;
+  createdAt?: Timestamp;
 }
 
 const Classrooms: React.FC = () => {
@@ -35,15 +37,18 @@ const Classrooms: React.FC = () => {
       setIsLoading(true);
       setError(null);
       try {
+        // Modifica questa query
         const classroomsCollection = collection(db, "classrooms");
-        const snapshot = await getDocs(classroomsCollection);
+        const q = query(classroomsCollection, orderBy("order")); // <-- Ordina per campo 'order'
+        const snapshot = await getDocs(q);
         const classroomsList = snapshot.docs.map((doc) => ({
           id: doc.id,
           name: doc.data().name,
+          order: doc.data().order, // <-- Leggi il campo 'order'
           createdAt: doc.data().createdAt,
-        }));
-        // Sort classrooms, perhaps by name or createdAt
-        classroomsList.sort((a, b) => a.name.localeCompare(b.name));
+        })) as Classroom[];
+
+        // La riga 'classroomsList.sort(...)' non è più necessaria qui
         setClassrooms(classroomsList);
       } catch (err) {
         console.error("Error fetching classrooms:", err);
@@ -59,21 +64,71 @@ const Classrooms: React.FC = () => {
     e.preventDefault();
     if (!newClassroomName.trim()) return;
     try {
+      // Calcola il nuovo ordine
+      const newOrder =
+        classrooms.length > 0
+          ? Math.max(...classrooms.map((c) => c.order)) + 1
+          : 0;
+
       const docRef = await addDoc(collection(db, "classrooms"), {
         name: newClassroomName.trim(),
         createdAt: Timestamp.fromDate(new Date()),
+        order: newOrder, // <-- Salva il nuovo ordine
       });
-      // Add to local state, maintaining sort order or re-fetch
-      const newClassroom = { id: docRef.id, name: newClassroomName.trim() };
-      setClassrooms(
-        [...classrooms, newClassroom].sort((a, b) =>
-          a.name.localeCompare(b.name)
-        )
-      );
+
+      const newClassroom = {
+        id: docRef.id,
+        name: newClassroomName.trim(),
+        order: newOrder,
+      };
+      // Aggiungi in fondo alla lista (è già ordinata)
+      setClassrooms([...classrooms, newClassroom]);
       setNewClassroomName("");
     } catch (error) {
       console.error("Error adding classroom:", error);
       setError("Errore durante l'aggiunta della classe.");
+    }
+  };
+
+  const handleMoveClassroom = async (
+    index: number,
+    direction: "up" | "down"
+  ) => {
+    const classToMove = classrooms[index];
+    const swapIndex = direction === "up" ? index - 1 : index + 1;
+
+    if (swapIndex < 0 || swapIndex >= classrooms.length) {
+      return;
+    }
+
+    const classToSwapWith = classrooms[swapIndex];
+
+    try {
+      const batch = writeBatch(db);
+
+      const classToMoveRef = doc(db, "classrooms", classToMove.id);
+      batch.update(classToMoveRef, { order: classToSwapWith.order });
+
+      const classToSwapWithRef = doc(db, "classrooms", classToSwapWith.id);
+      batch.update(classToSwapWithRef, { order: classToMove.order });
+
+      await batch.commit();
+
+      // Logica di aggiornamento locale resa più robusta per riflettere lo scambio dei valori 'order'.
+      const updatedClassrooms = classrooms
+        .map((c) => {
+          if (c.id === classToMove.id)
+            return { ...c, order: classToSwapWith.order };
+          if (c.id === classToSwapWith.id)
+            return { ...c, order: classToMove.order };
+          return c;
+        })
+        .sort((a, b) => a.order - b.order); // Riordiniamo lo stato locale in base ai nuovi valori
+
+      setClassrooms(updatedClassrooms);
+    } catch (err) {
+      console.error("Error reordering classrooms:", err);
+      setError("Errore durante il riordino delle classi.");
     }
   };
 
@@ -95,15 +150,15 @@ const Classrooms: React.FC = () => {
       const classroomDocRef = doc(db, "classrooms", editingClassroomId);
       await updateDoc(classroomDocRef, { name: editingName.trim() });
 
+      // Aggiorniamo lo stato locale senza riordinare
       setClassrooms(
-        classrooms
-          .map((c) =>
-            c.id === editingClassroomId ? { ...c, name: editingName.trim() } : c
-          )
-          .sort((a, b) => a.name.localeCompare(b.name))
+        classrooms.map((c) =>
+          c.id === editingClassroomId ? { ...c, name: editingName.trim() } : c
+        )
+        // RIMOSSO: .sort(...) che causava il riordino alfabetico indesiderato.
       );
 
-      handleCancelEdit(); // Resetta lo stato di modifica
+      handleCancelEdit();
     } catch (err) {
       console.error("Error updating classroom:", err);
       setError("Errore durante l'aggiornamento della classe.");
@@ -122,8 +177,13 @@ const Classrooms: React.FC = () => {
       return;
     }
 
+    const classToDelete = classrooms.find((c) => c.id === classroomId);
+    if (!classToDelete) return;
+
     try {
-      // È FONDAMENTALE eliminare prima la sottocollezione degli studenti
+      const batch = writeBatch(db);
+
+      // 1. Elimina la sottocollezione degli studenti
       const studentsCollectionRef = collection(
         db,
         "classrooms",
@@ -131,19 +191,34 @@ const Classrooms: React.FC = () => {
         "students"
       );
       const studentsSnapshot = await getDocs(studentsCollectionRef);
+      studentsSnapshot.forEach((studentDoc) => batch.delete(studentDoc.ref));
 
-      const batch = writeBatch(db);
-      studentsSnapshot.forEach((studentDoc) => {
-        batch.delete(studentDoc.ref);
+      // 2. Elimina il documento della classe
+      const classroomRef = doc(db, "classrooms", classroomId);
+      batch.delete(classroomRef);
+
+      // 3. NUOVO: Ri-ordina le classi successive per colmare il vuoto
+      const classesToUpdate = classrooms.filter(
+        (c) => c.order > classToDelete.order
+      );
+      classesToUpdate.forEach((c) => {
+        const classRef = doc(db, "classrooms", c.id);
+        batch.update(classRef, { order: c.order - 1 });
       });
-      await batch.commit(); // Esegui l'eliminazione in batch degli studenti
 
-      // Ora elimina il documento della classe
-      await deleteDoc(doc(db, "classrooms", classroomId));
+      // Esegui tutte le operazioni in una volta
+      await batch.commit();
 
-      setClassrooms(classrooms.filter((c) => c.id !== classroomId));
+      // Aggiorna lo stato locale
+      setClassrooms(
+        classrooms
+          .filter((c) => c.id !== classroomId)
+          .map((c) =>
+            c.order > classToDelete.order ? { ...c, order: c.order - 1 } : c
+          )
+      );
     } catch (err) {
-      console.error("Error deleting classroom:", err);
+      console.error("Error deleting classroom and reordering:", err);
       setError("Errore durante l'eliminazione della classe.");
     }
   };
@@ -177,7 +252,7 @@ const Classrooms: React.FC = () => {
             </p>
           ) : (
             <ul className="space-y-4 mb-10">
-              {classrooms.map((classroom) => (
+              {classrooms.map((classroom, index) => (
                 <li
                   key={classroom.id}
                   className="bg-white p-4 rounded-lg shadow-lg transition-shadow duration-300"
@@ -218,13 +293,54 @@ const Classrooms: React.FC = () => {
                       >
                         {classroom.name}
                       </span>
-                      <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => handleMoveClassroom(index, "up")}
+                          disabled={index === 0}
+                          className="p-2 text-gray-500 hover:bg-gray-100 rounded-full disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Sposta su"
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="h-5 w-5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M5 15l7-7 7 7"
+                            />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={() => handleMoveClassroom(index, "down")}
+                          disabled={index === classrooms.length - 1}
+                          className="p-2 text-gray-500 hover:bg-gray-100 rounded-full disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Sposta giù"
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="h-5 w-5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M19 9l-7 7-7-7"
+                            />
+                          </svg>
+                        </button>
                         <button
                           onClick={() => handleStartEdit(classroom)}
                           className="p-2 text-blue-500 hover:bg-blue-100 rounded-full"
                           title="Modifica nome"
                         >
-                          {/* SVG Icona Matita */}
                           <svg
                             xmlns="http://www.w3.org/2000/svg"
                             className="h-5 w-5"
@@ -241,13 +357,12 @@ const Classrooms: React.FC = () => {
                         </button>
                         <button
                           onClick={(e) => {
-                            e.stopPropagation(); // Ferma la navigazione quando si clicca elimina
+                            e.stopPropagation();
                             handleDeleteClassroom(classroom.id, classroom.name);
                           }}
                           className="p-2 text-red-500 hover:bg-red-100 rounded-full"
                           title="Elimina classe"
                         >
-                          {/* SVG Icona Cestino */}
                           <svg
                             xmlns="http://www.w3.org/2000/svg"
                             className="h-5 w-5"
@@ -261,7 +376,12 @@ const Classrooms: React.FC = () => {
                             />
                           </svg>
                         </button>
-                        <span className="text-indigo-500">&rarr;</span>
+                        <span
+                          onClick={() => handleClassroomSelect(classroom.id)}
+                          className="text-indigo-500 cursor-pointer p-2"
+                        >
+                          &rarr;
+                        </span>
                       </div>
                     </div>
                   )}
