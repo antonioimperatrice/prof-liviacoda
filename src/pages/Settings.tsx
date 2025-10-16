@@ -13,13 +13,15 @@ import {
   Timestamp,
   orderBy,
   query,
-  writeBatch, // Import writeBatch
+  writeBatch,
+  updateDoc, // Import writeBatch
 } from "firebase/firestore";
 
 interface Student {
   id: string;
   name: string;
   number: number;
+  dsa?: boolean;
   createdAt?: Timestamp;
 }
 
@@ -43,6 +45,7 @@ const Settings: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [newStudentNameForClass, setNewStudentNameForClass] =
     useState<string>("");
+  const [newStudentIsDSA, setNewStudentIsDSA] = useState<boolean>(false);
 
   const fetchClassroomAndStudents = useCallback(async () => {
     if (!classroomId) {
@@ -207,6 +210,54 @@ const Settings: React.FC = () => {
     );
   };
 
+  const handleSelectOnlyDSA = () => {
+    if (
+      currentConfiguringSlotIndex < 0 ||
+      currentConfiguringSlotIndex >= eligibilityPerSlot.length ||
+      students.length === 0
+    )
+      return;
+
+    // 1. Trova gli ID di tutti gli studenti DSA
+    const dsaStudentIds = students.filter((s) => s.dsa).map((s) => s.id);
+
+    // 2. Aggiorna lo stato, aggiungendo questi ID al set dello slot corrente
+    setEligibilityPerSlot((prevEligibility) =>
+      prevEligibility.map((slotEligibles, index) => {
+        if (index === currentConfiguringSlotIndex) {
+          const newSet = new Set(slotEligibles);
+          dsaStudentIds.forEach((id) => newSet.add(id)); // Aggiungi ogni ID
+          return newSet;
+        }
+        return slotEligibles;
+      })
+    );
+  };
+
+  const handleDeselectOnlyDSA = () => {
+    if (
+      currentConfiguringSlotIndex < 0 ||
+      currentConfiguringSlotIndex >= eligibilityPerSlot.length ||
+      students.length === 0
+    )
+      return;
+
+    // 1. Trova gli ID di tutti gli studenti DSA
+    const dsaStudentIds = students.filter((s) => s.dsa).map((s) => s.id);
+
+    // 2. Aggiorna lo stato, rimuovendo questi ID dal set dello slot corrente
+    setEligibilityPerSlot((prevEligibility) =>
+      prevEligibility.map((slotEligibles, index) => {
+        if (index === currentConfiguringSlotIndex) {
+          const newSet = new Set(slotEligibles);
+          dsaStudentIds.forEach((id) => newSet.delete(id)); // Rimuovi ogni ID
+          return newSet;
+        }
+        return slotEligibles;
+      })
+    );
+  };
+
   const handleCopyFirstSlotEligibilityToOthers = () => {
     if (
       numToSelect <= 1 ||
@@ -243,6 +294,7 @@ const Settings: React.FC = () => {
     const studentData = {
       name: newStudentNameForClass.trim(),
       number: newNumber,
+      dsa: newStudentIsDSA,
       createdAt: Timestamp.fromDate(new Date()),
     };
     try {
@@ -256,6 +308,7 @@ const Settings: React.FC = () => {
         )
       );
       setNewStudentNameForClass("");
+      setNewStudentIsDSA(false);
     } catch (err) {
       console.error(err);
       setError("Errore aggiunta studente.");
@@ -285,6 +338,33 @@ const Settings: React.FC = () => {
     } catch (err) {
       console.error(err);
       setError(`Errore eliminazione ${name}.`);
+    }
+  };
+
+  const handleToggleDSA = async (studentId: string, currentStatus: boolean) => {
+    if (!classroomId || spinning) return;
+
+    const studentDocRef = doc(
+      db,
+      "classrooms",
+      classroomId,
+      "students",
+      studentId
+    );
+
+    try {
+      // Aggiorna il DB
+      await updateDoc(studentDocRef, { dsa: !currentStatus });
+
+      // Aggiorna lo stato locale per una UI reattiva
+      setStudents((prevStudents) =>
+        prevStudents.map((s) =>
+          s.id === studentId ? { ...s, dsa: !currentStatus } : s
+        )
+      );
+    } catch (err) {
+      console.error("Error toggling DSA status:", err);
+      setError("Errore durante l'aggiornamento dello stato DSA.");
     }
   };
 
@@ -631,25 +711,49 @@ const Settings: React.FC = () => {
                         Conteggio: {currentEligibleSetForConfig.size} /{" "}
                         {students.length}
                       </p>
-                      <div className="flex gap-2 mb-3">
-                        <button
-                          onClick={handleSelectAllForCurrentSlot}
-                          className="flex-1 px-2 py-1.5 text-xs bg-green-100 hover:bg-green-200 text-green-700 rounded-md border border-green-300 disabled:opacity-50"
-                          disabled={students.length === 0 || spinning}
-                        >
-                          Selez. Tutti
-                        </button>
-                        <button
-                          onClick={handleDeselectAllForCurrentSlot}
-                          className="flex-1 px-2 py-1.5 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded-md border border-red-300 disabled:opacity-50"
-                          disabled={
-                            students.length === 0 ||
-                            currentEligibleSetForConfig.size === 0 ||
-                            spinning
-                          }
-                        >
-                          Deselez. Tutti
-                        </button>
+                      {/* Container per tutti i pulsanti di selezione/deselezione */}
+                      <div className="space-y-2 mb-3">
+                        {/* Prima riga: Seleziona/Deseleziona Tutti */}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleSelectAllForCurrentSlot}
+                            className="flex-1 px-2 py-1.5 text-xs bg-green-100 hover:bg-green-200 text-green-700 rounded-md border border-green-300 disabled:opacity-50"
+                            disabled={students.length === 0 || spinning}
+                          >
+                            Selez. Tutti
+                          </button>
+                          <button
+                            onClick={handleDeselectAllForCurrentSlot}
+                            className="flex-1 px-2 py-1.5 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded-md border border-red-300 disabled:opacity-50"
+                            disabled={
+                              students.length === 0 ||
+                              currentEligibleSetForConfig.size === 0 ||
+                              spinning
+                            }
+                          >
+                            Deselez. Tutti
+                          </button>
+                        </div>
+
+                        {/* Seconda riga: Pulsanti specifici per DSA */}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleSelectOnlyDSA}
+                            className="flex-1 px-2 py-1.5 text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-md border border-orange-300 disabled:opacity-50"
+                            disabled={!students.some((s) => s.dsa) || spinning}
+                            title="Aggiungi tutti gli studenti DSA alla lista degli idonei"
+                          >
+                            Selez. DSA
+                          </button>
+                          <button
+                            onClick={handleDeselectOnlyDSA}
+                            className="flex-1 px-2 py-1.5 text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-md border border-orange-300 disabled:opacity-50"
+                            disabled={!students.some((s) => s.dsa) || spinning}
+                            title="Rimuovi tutti gli studenti DSA dalla lista degli idonei"
+                          >
+                            Deselez. DSA
+                          </button>
+                        </div>
                       </div>
                       <ul className="space-y-1.5 max-h-80 overflow-y-auto custom-scrollbar pr-1.5">
                         {students.map((student) => (
@@ -795,7 +899,6 @@ const Settings: React.FC = () => {
                   </p>
                 ) : (
                   <ul className="space-y-1.5 max-h-72 overflow-y-auto custom-scrollbar pr-1.5">
-                    {/* --- START: Modified student list item with arrows --- */}
                     {students.map((student, index) => (
                       <li
                         key={student.id}
@@ -805,12 +908,27 @@ const Settings: React.FC = () => {
                           <span className="mr-2 px-2 py-0.5 bg-sky-100 text-sky-700 text-xs font-semibold rounded-full shrink-0">
                             {student.number}
                           </span>
-                          <span
-                            className="text-gray-800 font-medium truncate"
-                            title={student.name}
+                          {/* Ora il nome e l'etichetta sono un bottone unico */}
+                          <button
+                            onClick={() =>
+                              handleToggleDSA(student.id, !!student.dsa)
+                            }
+                            title="Clicca per cambiare lo stato DSA"
+                            className="flex items-center text-left"
+                            disabled={spinning}
                           >
-                            {student.name}
-                          </span>
+                            <span
+                              className="text-gray-800 font-medium truncate"
+                              title={student.name}
+                            >
+                              {student.name}
+                            </span>
+                            {student.dsa && (
+                              <span className="ml-2 px-2 py-0.5 text-xs font-semibold text-orange-800 bg-orange-200 rounded-full">
+                                DSA
+                              </span>
+                            )}
+                          </button>
                         </div>
                         <div className="flex items-center space-x-0.5 shrink-0">
                           <button
@@ -889,12 +1007,10 @@ const Settings: React.FC = () => {
                         </div>
                       </li>
                     ))}
-                    {/* --- END: Modified student list item --- */}
                   </ul>
                 )}
               </section>
               <section className="bg-white p-3 sm:p-4 rounded-xl shadow-xl">
-                {/* ... (Aggiungi Studente alla Classe section remains the same) ... */}
                 <h3 className="text-md sm:text-lg font-semibold text-gray-700 mb-3">
                   Aggiungi Studente alla Classe
                 </h3>
@@ -915,6 +1031,22 @@ const Settings: React.FC = () => {
                       disabled={spinning}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-sky-500 focus:border-sky-500 sm:text-sm disabled:bg-gray-50"
                     />
+                  </div>
+                  <div className="flex items-center">
+                    <input
+                      id="newStudentIsDSA"
+                      type="checkbox"
+                      checked={newStudentIsDSA}
+                      onChange={(e) => setNewStudentIsDSA(e.target.checked)}
+                      disabled={spinning}
+                      className="h-4 w-4 text-sky-600 border-gray-300 rounded focus:ring-sky-500"
+                    />
+                    <label
+                      htmlFor="newStudentIsDSA"
+                      className="ml-2 block text-sm text-gray-900"
+                    >
+                      Studente con DSA
+                    </label>
                   </div>
                   <button
                     type="submit"
