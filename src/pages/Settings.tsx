@@ -591,9 +591,7 @@ const Settings: React.FC = () => {
           </button>
           <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-600 via-cyan-500 to-teal-500 py-1">
             Gestione:{" "}
-            <span className="underline decoration-wavy decoration-sky-400">
-              {classroomName}
-            </span>
+            <span className="decoration-sky-400">{classroomName}</span>
           </h1>
         </header>
 
